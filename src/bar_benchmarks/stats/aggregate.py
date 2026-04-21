@@ -58,12 +58,19 @@ def summarize(results: Iterable[Result], *, submitted: int, job_uid: str) -> Bat
     )
 
 
-def from_bucket(results_bucket: str, job_uid: str, *, submitted: int, client=None) -> BatchReport:
+def from_bucket(
+    results_bucket: str,
+    job_uid: str,
+    *,
+    submitted: int,
+    project: str | None = None,
+    client=None,
+) -> BatchReport:
     """Pull every results.json under `<results-bucket>/<job_uid>/` and summarize."""
     if client is None:
         from google.cloud import storage
 
-        client = storage.Client()
+        client = storage.Client(project=project)
     bucket = client.bucket(results_bucket.removeprefix("gs://"))
     prefix = f"{job_uid}/"
     results: list[Result] = []

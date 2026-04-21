@@ -62,8 +62,12 @@ Each **Task** maps 1:1 to one benchmark run on one VM.
 ### `orchestrator` (control host, Python)
 
 - Parses the batch config (artifacts, N, instance spec, poison thresholds).
-- Hashes and uploads the five artifacts to the artifacts GCS bucket using
-  `google-cloud-storage`.
+- Resolves engine / bar-content / map catalog names against
+  `scripts/artifacts.toml`, checks whether each blob already lives at
+  its content-stable bucket key, and builds+uploads on a miss (via
+  `scripts/build-engine.sh` / `scripts/build-bar-content.sh` / curl).
+  Uploads the per-job overlay (packed from the scenario) + startscript
+  + wheel + manifest under `<job_uid>/`.
 - Builds a Batch `Job` spec (see "Batch job shape" below) and submits it
   via `google-cloud-batch`.
 - Polls the job until all Tasks reach a terminal state.
@@ -283,12 +287,10 @@ Sketch only; exact schema is TBD.
   "vm_id":          "...",
   "instance_type":  "...",
   "region":         "...",
-  "artifact_hashes": {
-    "engine":        "...",
-    "bar_content":   "...",
-    "overlay":       "...",
-    "map":           "...",
-    "startscript":   "..."
+  "artifact_names": {
+    "engine":        "recoil-5c157c8",
+    "bar_content":   "bar-test-29871-90f4bc1",
+    "map":           "hellas-basin-v1.4"
   },
   "preflight": {
     "passed":       true,

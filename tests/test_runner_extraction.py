@@ -5,7 +5,12 @@ from bar_benchmarks.task import runner
 
 def test_stage_lays_out_filesystem(task_env, tiny_artifacts):
     map_filename = tiny_artifacts["map_filename"]
-    startscript = runner._stage(task_env["artifacts"], map_filename)
+    startscript = runner._stage(
+        task_env["artifacts"],
+        task_env["bucket"],
+        tiny_artifacts["paths"],
+        map_filename,
+    )
 
     bar_sdd = task_env["data"] / "games" / "BAR.sdd"
     assert (task_env["engine"] / "spring-headless").is_file()

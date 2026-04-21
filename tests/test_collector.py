@@ -40,7 +40,7 @@ def test_collector_happy_path(task_env, tiny_artifacts):
     assert on_disk["benchmark"] == {"frames": 10, "fps": 60}
     assert on_disk["batch_id"] == "job-test"
     assert on_disk["instance_type"] == "n1-standard-8"
-    assert on_disk["artifact_hashes"]["engine"] == "0" * 64
+    assert on_disk["artifact_names"]["engine"] == "recoil-test"
 
 
 def test_collector_preflight_failed(task_env, tiny_artifacts):

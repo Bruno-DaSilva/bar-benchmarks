@@ -115,17 +115,9 @@ fi
 # All other entries are bare gs:// strings that require a local FILE.
 
 mirror_source=""
+uri="$(python3 "$script_dir/_catalog.py" "$catalog" "$art_type" "$art_name" dest)" || exit 1
 if [[ "$art_type" == "map" ]]; then
-  if dest_uri="$(python3 "$script_dir/_catalog.py" "$catalog" "$art_type" "$art_name" dest 2>/dev/null)"; then
-    # Table entry with dest field -> may also have a source to mirror from.
-    mirror_source="$(python3 "$script_dir/_catalog.py" "$catalog" "$art_type" "$art_name" source 2>/dev/null || true)"
-    uri="$dest_uri"
-  else
-    # Bare string entry.
-    uri="$(python3 "$script_dir/_catalog.py" "$catalog" "$art_type" "$art_name")" || exit 1
-  fi
-else
-  uri="$(python3 "$script_dir/_catalog.py" "$catalog" "$art_type" "$art_name")" || exit 1
+  mirror_source="$(python3 "$script_dir/_catalog.py" "$catalog" "$art_type" "$art_name" source 2>/dev/null || true)"
 fi
 
 # ---- resolve FILE (either user-provided or fetched from mirror_source) ----

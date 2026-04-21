@@ -13,11 +13,18 @@ class Reconciliation:
     missing_indices: list[int]
 
 
-def reconcile(results_bucket: str, job_uid: str, submitted: int, *, client=None) -> Reconciliation:
+def reconcile(
+    results_bucket: str,
+    job_uid: str,
+    submitted: int,
+    *,
+    project: str | None = None,
+    client=None,
+) -> Reconciliation:
     if client is None:
         from google.cloud import storage
 
-        client = storage.Client()
+        client = storage.Client(project=project)
     bucket_name = results_bucket.removeprefix("gs://")
     bucket = client.bucket(bucket_name)
     prefix = f"{job_uid}/"

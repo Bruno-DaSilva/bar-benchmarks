@@ -1,10 +1,10 @@
 # Local-only simulator image for scripts/fake-runner.sh. The container is
-# meant to impersonate a GCP Batch Task VM (batch-debian) closely enough
+# meant to impersonate a GCP Batch Task VM (batch-debian-12) closely enough
 # that a passing fake-runner implies the Batch path will work.
 #
 # Keep the installed package set aligned with
 # src/bar_benchmarks/orchestrator/batch_submitter.py:BOOTSTRAP_SCRIPT.
-# batch-debian ships Python 3.11 pre-installed, so we pre-install it here
+# batch-debian-12 ships Python 3.11 pre-installed, so we pre-install it here
 # too; the bootstrap script's apt-get line is then an idempotent no-op on
 # both paths, just like it is on Batch. If spring-headless turns out to
 # need additional system libraries at runtime, add them to BOTH this

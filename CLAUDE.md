@@ -191,25 +191,54 @@ round-tripping through GCP Batch.
   is used verbatim and whose `bar-data/` is tarred into `overlay.tar.gz`
   on the fly.
 
-The catalog is **dev-side only** — it does not change the production
-orchestrator's bucket layout, which still uploads the five artifacts +
-wheel + manifest under `gs://<artifacts-bucket>/<job_uid>/` (see
-`src/bar_benchmarks/orchestrator/artifacts.py`). Don't conflate the two.
-If a future change needs to push the catalog or scenario scheme into the
-production orchestrator, treat it as a deliberate redesign, not a refactor.
+The catalog is the **shared source of truth** for artifact identity:
+both `fake-runner.sh` and the production orchestrator
+(`bar-bench run --engine NAME --bar-content NAME --map NAME --scenario
+NAME`) look up names in `scripts/artifacts.toml`, resolve them to
+`dest` gs:// URIs, and stage the referenced blobs. On a cache miss
+(the bucket doesn't have the blob yet), the production orchestrator
+shells out to `scripts/build-engine.sh` (using the entry's `commit`),
+`scripts/build-bar-content.sh` (using `version`), or curl (using the
+map entry's `source` URL) to materialize the tarball locally, then
+uploads it to the catalog's `dest`. Names — not content hashes — drive
+the cache check so the orchestrator can skip the build before
+touching local disk.
+
+Bucket layout the orchestrator writes:
+
+```
+gs://<artifacts-bucket>/
+    engine/<name>.tar.gz                (shared; e.g. recoil-5c157c8)
+    bar-content/<name>.tar.gz           (shared; e.g. bar-test-29871-90f4bc1)
+    maps/<map_filename>                 (shared; basename from catalog dest URI)
+    <job_uid>/
+        overlay.tar.gz
+        startscript.txt
+        bar_benchmarks-<ver>-py3-none-any.whl
+        manifest.json
+```
+
+The task VM gets two FUSE mounts:
+
+- `/mnt/artifacts` → `<artifacts_bucket>/<job_uid>/` — per-job tree.
+- `/mnt/artifacts-bucket` → `<artifacts_bucket>/` — bucket root.
+  The runner resolves engine/bar-content/map under this mount using
+  the `paths` block in `manifest.json`.
 
 `fake-runner.sh` impersonates a Batch Task VM: it builds the
-`bar_benchmarks` wheel into `$workdir/artifacts`, stages the five
-artifacts there, then runs `batch_submitter.BOOTSTRAP_SCRIPT` (extracted
-verbatim from the Python module) followed by
-`python3 -m bar_benchmarks.task.main` inside a `linux/amd64`
-`debian:12-slim` Docker container (`scripts/fake-runner.Dockerfile`).
-Mounts place `$workdir/{artifacts,results,data,run,engine}` at the
-canonical Batch paths (`/mnt/artifacts`, `/mnt/results`,
-`/var/bar-data`, `/var/bar-run`, `/opt/recoil`). On Apple Silicon this
-requires Docker Desktop with Rosetta enabled (Settings → General → "Use
-Rosetta for x86_64/amd64 emulation") so the amd64 `spring-headless`
-binary can execute. Downloaded artifacts are cached at
+`bar_benchmarks` wheel into the per-job subtree, stages the artifacts
+into the same bucket-layout tree, then runs
+`batch_submitter.BOOTSTRAP_SCRIPT` (extracted verbatim from the Python
+module) followed by `python3 -m bar_benchmarks.task.main` inside a
+`linux/amd64` `debian:12-slim` Docker container
+(`scripts/fake-runner.Dockerfile`). Mounts place
+`$workdir/{bucket,bucket/fake-runner-local,results,data,run,engine}`
+at the canonical Batch paths (`/mnt/artifacts-bucket`,
+`/mnt/artifacts`, `/mnt/results`, `/var/bar-data`, `/var/bar-run`,
+`/opt/recoil`). On Apple Silicon this requires Docker Desktop with
+Rosetta enabled (Settings → General → "Use Rosetta for x86_64/amd64
+emulation") so the amd64 `spring-headless` binary can execute.
+Downloaded artifacts are cached at
 `.smoke/fake-runner/cache/<bucket>/<key>` so re-runs skip the network.
 
 If the Dockerfile's package set ever needs to grow (e.g. spring-headless

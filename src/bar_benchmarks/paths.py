@@ -9,8 +9,16 @@ def _env_path(name: str, default: str) -> Path:
 
 
 def artifacts_dir() -> Path:
-    """GCS FUSE mount holding the 5 input artifacts + wheel. Read-only on the VM."""
+    """GCS FUSE mount scoped to `<artifacts-bucket>/<job_uid>/` — per-job
+    artifacts (overlay, startscript, wheel, manifest). Read-only on the VM."""
     return _env_path("BAR_ARTIFACTS_DIR", "/mnt/artifacts")
+
+
+def artifacts_bucket_dir() -> Path:
+    """GCS FUSE mount scoped to the artifacts bucket root — shared,
+    content-addressed artifacts (engine, bar-content, map). Read-only on
+    the VM. Runner resolves keys from manifest["paths"] against this."""
+    return _env_path("BAR_ARTIFACTS_BUCKET_DIR", "/mnt/artifacts-bucket")
 
 
 def results_dir() -> Path:

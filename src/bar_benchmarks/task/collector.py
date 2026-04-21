@@ -14,7 +14,7 @@ from typing import Any
 
 from bar_benchmarks import paths
 from bar_benchmarks.types import (
-    ArtifactHashes,
+    ArtifactNames,
     PoisonSummary,
     PreflightResult,
     Result,
@@ -89,7 +89,7 @@ def run() -> Result:
         vm_id=paths.batch_task_index(),
         instance_type=manifest["instance_type"],
         region=manifest["region"],
-        artifact_hashes=ArtifactHashes(**manifest["artifact_hashes"]),
+        artifact_names=ArtifactNames(**manifest["artifact_names"]),
         preflight=preflight,
         run=verdict,
         benchmark=benchmark,

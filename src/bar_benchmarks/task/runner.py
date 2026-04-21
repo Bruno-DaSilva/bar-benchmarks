@@ -20,8 +20,6 @@ from bar_benchmarks import paths
 from bar_benchmarks.types import RunnerVerdict
 
 BAR_SDD_NAME = "BAR.sdd"
-ENGINE_TARBALL = "engine.tar.gz"
-BAR_CONTENT_TARBALL = "bar-content.tar.gz"
 OVERLAY_TARBALL = "overlay.tar.gz"
 STARTSCRIPT_NAME = "startscript.txt"
 MANIFEST_NAME = "manifest.json"
@@ -38,8 +36,18 @@ def _extract_tarball(src: Path, dest: Path) -> None:
             tf.extractall(dest)
 
 
-def _stage(artifacts: Path, map_filename: str) -> Path:
-    """Run steps 1–6. Returns the path of the startscript on disk."""
+def _stage(
+    artifacts: Path,
+    bucket_root: Path,
+    shared_keys: dict[str, str],
+    map_filename: str,
+) -> Path:
+    """Run steps 1–6. Returns the path of the startscript on disk.
+
+    `artifacts` is the per-job FUSE mount (overlay, startscript, wheel,
+    manifest). `bucket_root` is the whole-bucket FUSE mount; engine /
+    bar-content / map live under it at the keys given by `shared_keys`.
+    """
     engine_root = paths.engine_dir()
     data = paths.data_dir()
     games = data / "games"
@@ -49,15 +57,15 @@ def _stage(artifacts: Path, map_filename: str) -> Path:
     for d in (engine_root, games, maps, paths.run_dir()):
         d.mkdir(parents=True, exist_ok=True)
 
-    _extract_tarball(artifacts / ENGINE_TARBALL, engine_root)
-    _extract_tarball(artifacts / BAR_CONTENT_TARBALL, bar_sdd)
+    _extract_tarball(bucket_root / shared_keys["engine"], engine_root)
+    _extract_tarball(bucket_root / shared_keys["bar_content"], bar_sdd)
     # The overlay tarball mirrors /var/bar-data/ — files under games/BAR.sdd/
     # overwrite/extend the game content (standard overlay use), while files
     # at other paths drop extras (e.g. a benchmark_snapshot.lua) into
     # /var/bar-data/ so the engine's write-dir picks them up.
     _extract_tarball(artifacts / OVERLAY_TARBALL, data)
 
-    shutil.copy2(artifacts / map_filename, maps / map_filename)
+    shutil.copy2(bucket_root / shared_keys["map"], maps / map_filename)
 
     if not (bar_sdd / "VERSION").is_file():
         raise RuntimeError(f"BAR content missing VERSION file at {bar_sdd / 'VERSION'}")
@@ -84,8 +92,10 @@ def _invoke_engine(startscript: Path) -> tuple[int, float]:
 def run() -> RunnerVerdict:
     started_at = datetime.now(UTC)
     artifacts = paths.artifacts_dir()
+    bucket_root = paths.artifacts_bucket_dir()
     manifest = json.loads((artifacts / MANIFEST_NAME).read_text())
     map_filename = manifest["map_filename"]
+    shared_keys = manifest["paths"]
 
     error: str | None = None
     engine_exit = -1
@@ -93,7 +103,7 @@ def run() -> RunnerVerdict:
     bench_out: str | None = None
 
     try:
-        startscript = _stage(artifacts, map_filename)
+        startscript = _stage(artifacts, bucket_root, shared_keys, map_filename)
         engine_exit, wall = _invoke_engine(startscript)
         if engine_exit != 0:
             error = "engine_crash"

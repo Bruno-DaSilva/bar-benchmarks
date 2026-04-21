@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 
 from bar_benchmarks.stats import aggregate
 from bar_benchmarks.types import (
-    ArtifactHashes,
+    ArtifactNames,
     PoisonSummary,
     PreflightResult,
     Result,
@@ -18,12 +18,10 @@ def _r(wall: float, valid: bool = True, reason: str | None = None) -> Result:
         vm_id="ix",
         instance_type="n1-standard-8",
         region="us-west4",
-        artifact_hashes=ArtifactHashes(
-            engine="a" * 64,
-            bar_content="b" * 64,
-            overlay="c" * 64,
-            map="d" * 64,
-            startscript="e" * 64,
+        artifact_names=ArtifactNames(
+            engine="recoil-abc1234",
+            bar_content="bar-test-29871-90f4bc1",
+            map="hellas-basin-v1.4",
         ),
         preflight=PreflightResult(passed=True),
         run=RunnerVerdict(

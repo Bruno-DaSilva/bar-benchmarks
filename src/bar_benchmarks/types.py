@@ -11,12 +11,13 @@ class _Frozen(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
 
-class ArtifactHashes(_Frozen):
+class ArtifactNames(_Frozen):
+    """Catalog-assigned names for the three shared artifacts that
+    identify what actually ran. Included in results.json for traceability."""
+
     engine: str
     bar_content: str
-    overlay: str
     map: str
-    startscript: str
 
 
 class PreflightResult(BaseModel):
@@ -53,7 +54,7 @@ class Result(BaseModel):
     vm_id: str
     instance_type: str
     region: str
-    artifact_hashes: ArtifactHashes
+    artifact_names: ArtifactNames
     preflight: PreflightResult
     run: RunnerVerdict
     benchmark: dict[str, Any] = Field(default_factory=dict)
@@ -63,13 +64,17 @@ class Result(BaseModel):
 
 
 class BatchConfig(_Frozen):
-    """Parsed CLI args for one `bar-bench run` invocation. Control-host only."""
+    """Parsed CLI args for one `bar-bench run` invocation. Control-host only.
 
-    engine: Path
-    bar_content: Path
-    overlay: Path
-    map: Path
-    startscript: Path
+    Engine / bar-content / map identities are catalog names resolved against
+    scripts/artifacts.toml; the scenario folder supplies overlay + startscript.
+    """
+
+    engine_name: str
+    bar_content_name: str
+    map_name: str
+    scenario_dir: Path
+    catalog_path: Path
     count: int
     project: str
     region: str
@@ -77,6 +82,7 @@ class BatchConfig(_Frozen):
     results_bucket: str
     machine_type: str
     max_run_duration_s: int
+    service_account: str | None = None
     wheel: Path | None = None
 
 

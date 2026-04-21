@@ -1,42 +1,38 @@
-# Artifact catalog for scripts/fake-runner.sh and scripts/fake-orchestrator.sh.
+# Artifact catalog. Source of truth for every artifact (engine,
+# bar-content, map) that gets staged to the artifacts bucket. Consumed by:
+#   - scripts/fake-runner.sh / scripts/fake-orchestrator.sh (dev loop)
+#   - src/bar_benchmarks/orchestrator/catalog.py (production orchestrator)
 #
-# Covers the three artifact types that live outside this repo: engine,
-# bar_content, and map. Overlay and startscript are repo-local — they live
-# as files under benchmarks/<scenario>/ and are selected by `--scenario NAME`,
-# not by catalog lookup.
+# Names inside a section are CLI handles: pass them verbatim to
+# `bar-bench run --engine NAME --bar-content NAME --map NAME` and
+# `fake-runner.sh`. The orchestrator looks up the entry, checks whether
+# the bucket already has the blob at `dest`, and only builds +
+# uploads on a miss. Adding a new artifact = add an entry here.
 #
-# Names inside a section are human-readable handles, decoupled from any
-# single job submission. To publish a new artifact under a name, add the
-# entry here and then run `fake-orchestrator.sh --<type> <name> path/to/file`.
+# Entry shape (always a TOML table now):
+#   engine.<name>       dest = "gs://...", commit = "<git SHA>"
+#   bar_content.<name>  dest = "gs://...", version = "Beyond All Reason [test-]<build>-<sha>"
+#   map.<name>          dest = "gs://...", [source = "https://..."]
+#
+# `commit` is forwarded to scripts/build-engine.sh --commit on miss.
+# `version` is forwarded to scripts/build-bar-content.sh --version on miss.
+# `source` (maps only) is fetched with curl on miss.
 #
 # The map entry's dest URI basename becomes the on-disk filename (the runner
 # reads map_filename from the synthesized manifest, see
-# src/bar_benchmarks/task/runner.py:79).
+# src/bar_benchmarks/task/runner.py).
 #
-# Map entries may be either a bare gs:// URI (user-built map, publish with
-# `fake-orchestrator.sh --map NAME FILE`) or a TOML table of the shape
-# `{source = "https://...", dest = "gs://..."}`. For the latter, invoking
-# `fake-orchestrator.sh --map NAME` (no FILE) fetches `source` into a temp
-# file and uploads to `dest` — use this to mirror maps hosted on
-# springfiles.com into the artifacts bucket.
+# Overlay and startscript are not catalog-resolved — they live as files
+# under benchmarks/<scenario>/ and are selected by `--scenario NAME`.
 
-[engine]
-# recoil-2025-04 = "gs://bar-experiments-bench-artifacts/engine/recoil-2025-04.tar.gz"
-recoil-5c157c8 = "gs://bar-experiments-bench-artifacts/engine/recoil-5c157c8.tar.gz"
+[engine.recoil-5c157c8]
+dest = "gs://bar-experiments-bench-artifacts/engine/recoil-5c157c8.tar.gz"
+commit = "5c157c8"
 
-[bar_content]
-# bar-1.2.3 = "gs://bar-experiments-bench-artifacts/bar-content/bar-1.2.3.tar.gz"
-bar-test-29871-90f4bc1 = "gs://bar-experiments-bench-artifacts/bar-content/bar-test-29871-90f4bc1.tar.gz"
-
-[map]
-# Bare string: local file to publish.
-# tiny = "gs://bar-experiments-bench-artifacts/maps/tiny.smf"
-#
-# Table: mirror from an upstream URL (springfiles etc.) into the artifacts bucket.
-# [map.techno]
-# source = "https://springfiles.springrts.com/files/maps/techno_lands_final_cataclysm_defense_1.6.sd7"
-# dest   = "gs://bar-experiments-bench-artifacts/maps/techno_lands_final_cataclysm_defense_1.6.sd7"
+[bar_content.bar-test-29871-90f4bc1]
+dest = "gs://bar-experiments-bench-artifacts/bar-content/bar-test-29871-90f4bc1.tar.gz"
+version = "Beyond All Reason test-29871-90f4bc1"
 
 [map."hellas-basin-v1.4"]
 source = "https://springfiles.springrts.com/files/maps/hellas_basin_v1.4.sd7"
-dest   = "gs://bar-experiments-bench-artifacts/maps/hellas_basin_v1.4.sd7"
+dest = "gs://bar-experiments-bench-artifacts/maps/hellas_basin_v1.4.sd7"

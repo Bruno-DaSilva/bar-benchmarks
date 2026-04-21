@@ -38,8 +38,11 @@ under games/BAR.sdd/ override the base content; anything else lands in
 
 Downloaded artifacts are cached under <workdir>/cache/... so subsequent
 runs skip the network. The runner's working tree
-(<workdir>/{artifacts,data,run,engine,results}) is wiped at the start of
-each run to give the runner a fresh-VM look.
+(<workdir>/{bucket,data,run,engine,results}) is wiped at the start of
+each run to give the runner a fresh-VM look. <workdir>/bucket mirrors
+the real artifacts-bucket layout: content-addressed engine/bar-content/
+map at the root and per-job files (overlay, startscript, wheel,
+manifest) under fake-runner-local/.
 
 Requires Docker. On Apple Silicon, enable Rosetta in Docker Desktop so
 the amd64 spring-headless binary can run under emulation.
@@ -122,7 +125,13 @@ if [[ ! -f "$scenario_dir/startscript.txt" ]]; then
 fi
 
 cache_dir="$workdir/cache"
-artifacts_dir="$workdir/artifacts"
+# bucket_dir mirrors the real artifacts-bucket tree: content-addressed
+# engine/bar-content/map at the root, per-job entries under <job_uid>/.
+# Mounted at /mnt/artifacts-bucket inside the container, while
+# <job_uid>/ is also mounted at /mnt/artifacts (same as on Batch).
+bucket_dir="$workdir/bucket"
+job_uid="fake-runner-local"
+artifacts_dir="$bucket_dir/$job_uid"
 data_dir="$workdir/data"
 run_dir="$workdir/run"
 engine_dir="$workdir/engine"
@@ -135,9 +144,9 @@ lookup() {
   python3 "$script_dir/_catalog.py" "$catalog" "$1" "$2" ${3:+"$3"}
 }
 
-engine_uri="$(lookup engine "$engine_name")"             || exit 1
-bar_content_uri="$(lookup bar_content "$bar_content_name")" || exit 1
-# Map entries may be tables with source/dest — the runner only reads the
+engine_uri="$(lookup engine "$engine_name" dest)"         || exit 1
+bar_content_uri="$(lookup bar_content "$bar_content_name" dest)" || exit 1
+# Map entries may also have a source — the runner only reads the
 # dest (gs://) URI, which fake-orchestrator.sh will have populated.
 map_uri="$(lookup map "$map_name" dest)"                 || exit 1
 map_basename="$(basename "$map_uri")"
@@ -186,14 +195,30 @@ map_local="$(fetch "$map_uri")"                   || exit 1
 # ---- wipe + re-stage runtime dirs ----
 
 echo "[fake-runner] staging working tree at $workdir" >&2
-rm -rf "$artifacts_dir" "$data_dir" "$run_dir" "$engine_dir" "$results_dir"
+rm -rf "$bucket_dir" "$data_dir" "$run_dir" "$engine_dir" "$results_dir"
 mkdir -p "$artifacts_dir" "$data_dir" "$run_dir" "$engine_dir" "$results_dir"
 
-# Hardlink cached artifacts into artifacts_dir under the canonical names
-# runner.py expects (constants in src/bar_benchmarks/task/runner.py:22-27).
-# Hardlinks make the artifacts dir look like a real directory of files —
-# matching what the GCS FUSE mount presents on Batch — without copying
-# multi-GB blobs. Fall back to cp if the cache lives on a different volume.
+# Stage the three shared artifacts under the same bucket keys the
+# production orchestrator writes — i.e. the path portion of each
+# catalog dest URI. Keys are name-based (not content-hashed), matching
+# scripts/artifacts.toml.
+uri_to_key() {
+  local uri="$1"
+  local stripped="${uri#gs://}"
+  printf '%s' "${stripped#*/}"
+}
+
+engine_key="$(uri_to_key "$engine_uri")"
+bar_content_key="$(uri_to_key "$bar_content_uri")"
+map_key="$(uri_to_key "$map_uri")"
+
+mkdir -p "$bucket_dir/$(dirname "$engine_key")" \
+         "$bucket_dir/$(dirname "$bar_content_key")" \
+         "$bucket_dir/$(dirname "$map_key")"
+
+# Hardlink cached downloads into the bucket-root tree. Hardlinks keep
+# the tree cheap without duplicating multi-GB blobs; fall back to cp if
+# the cache lives on a different volume.
 stage_artifact() {
   local src="$1" dst="$2"
   if ! ln "$src" "$dst" 2>/dev/null; then
@@ -201,15 +226,15 @@ stage_artifact() {
   fi
 }
 
-stage_artifact "$engine_local"      "$artifacts_dir/engine.tar.gz"
-stage_artifact "$bar_content_local" "$artifacts_dir/bar-content.tar.gz"
-stage_artifact "$map_local"         "$artifacts_dir/$map_basename"
+stage_artifact "$engine_local"      "$bucket_dir/$engine_key"
+stage_artifact "$bar_content_local" "$bucket_dir/$bar_content_key"
+stage_artifact "$map_local"         "$bucket_dir/$map_key"
 
-# Scenario-derived artifacts: the startscript is the scenario's file as-is,
-# and overlay.tar.gz is the scenario's bar-data/ tree — contents at tarball
-# root so runner.py extracts it directly onto /var/bar-data/ (runner.py:49).
-# If bar-data/ is absent, produce an empty tarball so the runner's extract
-# step is a no-op rather than a missing-file error.
+# Scenario-derived per-job artifacts: the startscript is the scenario's
+# file as-is, and overlay.tar.gz is the scenario's bar-data/ tree —
+# contents at tarball root so runner.py extracts it directly onto
+# /var/bar-data/. If bar-data/ is absent, produce an empty tarball so
+# the runner's extract step is a no-op rather than a missing-file error.
 cp "$scenario_dir/startscript.txt" "$artifacts_dir/startscript.txt"
 if [[ -d "$scenario_dir/bar-data" ]]; then
   echo "[fake-runner] packing scenario bar-data -> overlay.tar.gz" >&2
@@ -233,22 +258,25 @@ if [[ -z "$wheel_filename" ]]; then
   exit 1
 fi
 
-# Synthesize a manifest: only map_filename is read by the runner
-# (runner.py:79); the other fields are here so the collector won't choke if
-# we later wire it in. Hash placeholders match the convention in
-# tests/conftest.py:80-95.
+# Synthesize a manifest matching what orchestrator/artifacts.py emits:
+# artifact_names + paths block (engine/bar_content/map keys under the
+# bucket root) + map_filename. Collector surfaces artifact_names via
+# results.json for traceability.
 cat >"$artifacts_dir/manifest.json" <<EOF
 {
-  "job_uid": "fake-runner-local",
+  "job_uid": "$job_uid",
   "region": "local",
   "instance_type": "local",
   "map_filename": "$map_basename",
-  "artifact_hashes": {
-    "engine": "$(printf '0%.0s' {1..64})",
-    "bar_content": "$(printf '1%.0s' {1..64})",
-    "overlay": "$(printf '2%.0s' {1..64})",
-    "map": "$(printf '3%.0s' {1..64})",
-    "startscript": "$(printf '4%.0s' {1..64})"
+  "artifact_names": {
+    "engine": "$engine_name",
+    "bar_content": "$bar_content_name",
+    "map": "$map_name"
+  },
+  "paths": {
+    "engine": "$engine_key",
+    "bar_content": "$bar_content_key",
+    "map": "$map_key"
   },
   "wheel_filename": "$wheel_filename"
 }
@@ -289,14 +317,16 @@ set +e
 docker run --rm \
   --platform=linux/amd64 \
   -e BAR_ARTIFACTS_DIR=/mnt/artifacts \
+  -e BAR_ARTIFACTS_BUCKET_DIR=/mnt/artifacts-bucket \
   -e BAR_RESULTS_DIR=/mnt/results \
   -e BAR_DATA_DIR=/var/bar-data \
   -e BAR_RUN_DIR=/var/bar-run \
   -e BAR_ENGINE_DIR=/opt/recoil \
   -e BAR_BENCHMARK_OUTPUT_PATH=benchmark-results.json \
-  -e BATCH_JOB_UID=fake-runner-local \
+  -e BATCH_JOB_UID="$job_uid" \
   -e BATCH_TASK_INDEX=0 \
   -v "$artifacts_dir:/mnt/artifacts" \
+  -v "$bucket_dir:/mnt/artifacts-bucket" \
   -v "$results_dir:/mnt/results" \
   -v "$data_dir:/var/bar-data" \
   -v "$run_dir:/var/bar-run" \

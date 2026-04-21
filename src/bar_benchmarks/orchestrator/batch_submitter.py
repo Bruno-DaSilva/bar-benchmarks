@@ -10,35 +10,88 @@ from google.cloud import batch_v1
 
 from bar_benchmarks.types import BatchConfig
 
-SERVICE_ACCOUNT = "benchmark-runner@bar-experiments.iam.gserviceaccount.com"
 MIN_CPU_PLATFORM = "Intel Skylake"
 BOOT_DISK_GB = 50
 BOOT_DISK_TYPE = "pd-balanced"
+# Dedicated scratch disk for per-VM working sets (engine extract, BAR
+# data, runtime pypkgs). Batch's default root-fs scratch under /mnt/disks
+# is tiny (a few hundred MB) so pip --target hits ENOSPC; 10 GB is
+# ample headroom for the wheel, pydantic, and the engine extraction.
+SCRATCH_DEVICE_NAME = "bar-scratch"
+SCRATCH_DISK_GB = 10
+SCRATCH_DISK_TYPE = "pd-balanced"
+SCRATCH_MOUNT = "/mnt/disks/scratch"
+
+# Each runnable runs inside this container. Using an official Python
+# image decouples the task runtime from whatever base image Batch picks
+# for the host VM (some Batch image variants still ship Debian 11 /
+# Python 3.9 with a broken system pip). python:3.11-slim is Debian-12
+# based and ships `python3`, `pip`, and `venv` ready to use.
+CONTAINER_IMAGE = "python:3.11-slim"
+
+# Batch VM rootfs is read-only outside /mnt/disks/*. Every host path
+# we write to — GCS FUSE mounts AND per-VM scratch — must live under
+# /mnt/disks. Containers see the canonical /mnt/artifacts, /var/bar-run
+# etc. through bind remapping, so task code / env vars don't change.
+_HOST_ARTIFACTS = "/mnt/disks/artifacts"
+_HOST_ARTIFACTS_BUCKET = "/mnt/disks/artifacts-bucket"
+_HOST_RESULTS = "/mnt/disks/results"
+# Scratch paths live on the attached SCRATCH_MOUNT data disk.
+_HOST_DATA = f"{SCRATCH_MOUNT}/bar-data"
+_HOST_RUN = f"{SCRATCH_MOUNT}/bar-run"
+_HOST_ENGINE = f"{SCRATCH_MOUNT}/engine"
+
+CONTAINER_VOLUMES = [
+    f"{_HOST_ARTIFACTS}:/mnt/artifacts",
+    f"{_HOST_ARTIFACTS_BUCKET}:/mnt/artifacts-bucket",
+    f"{_HOST_RESULTS}:/mnt/results",
+    f"{_HOST_DATA}:/var/bar-data",
+    f"{_HOST_RUN}:/var/bar-run",
+    f"{_HOST_ENGINE}:/opt/recoil",
+]
+
+# pip --target layout instead of a venv: Batch mounts /mnt/disks/*
+# with noexec in some images, which breaks `python -m venv --seed`
+# (the seeded python3 copy lands inside the shared mount and can't be
+# re-executed). --target just drops packages into a directory with no
+# executables of its own, and PYTHONPATH makes subsequent runnables
+# pick them up.
+PACKAGES_DIR = "/var/bar-run/pypkgs"
 
 ENV_VARS = {
     "BAR_ARTIFACTS_DIR": "/mnt/artifacts",
+    "BAR_ARTIFACTS_BUCKET_DIR": "/mnt/artifacts-bucket",
     "BAR_RESULTS_DIR": "/mnt/results",
     "BAR_DATA_DIR": "/var/bar-data",
     "BAR_RUN_DIR": "/var/bar-run",
     "BAR_ENGINE_DIR": "/opt/recoil",
     "BAR_BENCHMARK_OUTPUT_PATH": "benchmark-results.json",
+    "PYTHONPATH": PACKAGES_DIR,
 }
 
-BOOTSTRAP_SCRIPT = r"""#!/bin/sh
-set -eu
-apt-get update -y >/dev/null
-apt-get install -y --no-install-recommends python3 python3-pip python3-venv >/dev/null
+BOOTSTRAP_SCRIPT = r"""set -eu
+mkdir -p /var/bar-run/pypkgs
+# pydantic with deps (pulls pydantic_core); wheel without deps (skips
+# control-host-only deps like typer, google-cloud-*).
+pip install --no-cache-dir --target /var/bar-run/pypkgs pydantic
 WHEEL="$(ls /mnt/artifacts/bar_benchmarks-*.whl | head -n1)"
-# Install pydantic with its deps (pulls pydantic_core), then the wheel
-# without deps (skips control-host-only deps like typer, google-cloud-*).
-python3 -m pip install --break-system-packages pydantic
-python3 -m pip install --break-system-packages --no-deps "$WHEEL"
+pip install --no-cache-dir --target /var/bar-run/pypkgs --no-deps "$WHEEL"
 """
 
 
-def _runnable(text: str, *, background: bool = False, always_run: bool = False) -> batch_v1.Runnable:
+def _container_runnable(
+    commands: list[str],
+    *,
+    background: bool = False,
+    always_run: bool = False,
+) -> batch_v1.Runnable:
     return batch_v1.Runnable(
-        script=batch_v1.Runnable.Script(text=text),
+        container=batch_v1.Runnable.Container(
+            image_uri=CONTAINER_IMAGE,
+            entrypoint="",
+            commands=commands,
+            volumes=CONTAINER_VOLUMES,
+        ),
         background=background,
         always_run=always_run,
     )
@@ -54,23 +107,34 @@ def build_job(
     volumes = [
         batch_v1.Volume(
             gcs=batch_v1.GCS(remote_path=f"{artifacts_bucket}/{job_uid}"),
-            mount_path="/mnt/artifacts",
+            mount_path=_HOST_ARTIFACTS,
+        ),
+        batch_v1.Volume(
+            gcs=batch_v1.GCS(remote_path=artifacts_bucket),
+            mount_path=_HOST_ARTIFACTS_BUCKET,
         ),
         batch_v1.Volume(
             gcs=batch_v1.GCS(remote_path=f"{results_bucket}/{job_uid}"),
-            mount_path="/mnt/results",
+            mount_path=_HOST_RESULTS,
+        ),
+        batch_v1.Volume(
+            device_name=SCRATCH_DEVICE_NAME,
+            mount_path=SCRATCH_MOUNT,
         ),
     ]
 
     runnables = [
-        _runnable(BOOTSTRAP_SCRIPT),
-        _runnable(
-            "python3 -m bar_benchmarks.poison.monitor",
+        _container_runnable(["/bin/sh", "-c", BOOTSTRAP_SCRIPT]),
+        _container_runnable(
+            ["python3", "-m", "bar_benchmarks.poison.monitor"],
             background=True,
             always_run=True,
         ),
-        _runnable("python3 -m bar_benchmarks.task.main"),
-        _runnable("python3 -m bar_benchmarks.task.collector", always_run=True),
+        _container_runnable(["python3", "-m", "bar_benchmarks.task.main"]),
+        _container_runnable(
+            ["python3", "-m", "bar_benchmarks.task.collector"],
+            always_run=True,
+        ),
     ]
 
     task_spec = batch_v1.TaskSpec(
@@ -95,11 +159,24 @@ def build_job(
             size_gb=BOOT_DISK_GB,
             type_=BOOT_DISK_TYPE,
         ),
+        disks=[
+            batch_v1.AllocationPolicy.AttachedDisk(
+                new_disk=batch_v1.AllocationPolicy.Disk(
+                    size_gb=SCRATCH_DISK_GB,
+                    type_=SCRATCH_DISK_TYPE,
+                ),
+                device_name=SCRATCH_DEVICE_NAME,
+            ),
+        ],
     )
 
+    service_account_email = (
+        cfg.service_account
+        or f"benchmark-runner@{cfg.project}.iam.gserviceaccount.com"
+    )
     allocation = batch_v1.AllocationPolicy(
         instances=[batch_v1.AllocationPolicy.InstancePolicyOrTemplate(policy=policy)],
-        service_account=batch_v1.ServiceAccount(email=SERVICE_ACCOUNT),
+        service_account=batch_v1.ServiceAccount(email=service_account_email),
     )
 
     return batch_v1.Job(

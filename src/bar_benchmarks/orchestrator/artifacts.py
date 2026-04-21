@@ -1,49 +1,45 @@
-"""Hash and upload the 5 input artifacts + the task-side wheel + a manifest.
+"""Ensure the shared + per-job artifacts are in the bucket, then upload the manifest.
 
-Layout under the artifacts bucket for one job:
+Bucket layout:
 
-    gs://<artifacts-bucket>/<job_uid>/
-        engine.tar.gz
-        bar-content.tar.gz
-        overlay.tar.gz
-        <map_filename>              (original filename, preserved)
-        startscript.txt
-        bar_benchmarks-<ver>-py3-none-any.whl
-        manifest.json
+    gs://<artifacts-bucket>/
+        engine/<name>.tar.gz                     (shared across jobs)
+        bar-content/<name>.tar.gz                (shared across jobs)
+        maps/<map_filename>                      (shared across jobs)
+        <job_uid>/
+            overlay.tar.gz
+            startscript.txt
+            bar_benchmarks-<ver>-py3-none-any.whl
+            manifest.json
+
+Shared keys are derived from the catalog name (not content hash) so we
+can decide whether to skip a build before we have the tarball on disk.
+On cache miss, we shell out to scripts/build-*.sh to materialize the
+tarball locally, then upload.
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 import subprocess
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from bar_benchmarks.types import ArtifactHashes, BatchConfig
-
-CHUNK = 1 << 20
-
-
-def sha256_file(path: Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as f:
-        while chunk := f.read(CHUNK):
-            h.update(chunk)
-    return h.hexdigest()
+from bar_benchmarks.orchestrator import build
+from bar_benchmarks.orchestrator.catalog import Catalog, key_from_uri
+from bar_benchmarks.types import ArtifactNames, BatchConfig
 
 
 @dataclass(frozen=True)
 class UploadPlan:
-    """What the orchestrator intends to upload, with hashes and destination keys."""
-
-    hashes: ArtifactHashes
-    wheel_hash: str
-    wheel_filename: str
+    names: ArtifactNames
+    shared_keys: dict[str, str]  # "engine" | "bar_content" | "map" -> bucket key
     map_filename: str
+    wheel_filename: str
     key_prefix: str  # "<job_uid>/"
-    local_paths: dict[str, Path]  # canonical_name -> local path
+    job_uploads: dict[str, Path]  # filename under key_prefix -> local source
 
 
 def build_wheel(project_root: Path) -> Path:
@@ -64,31 +60,39 @@ def build_wheel(project_root: Path) -> Path:
     return wheels[-1]
 
 
-def plan(cfg: BatchConfig, job_uid: str, wheel: Path) -> UploadPlan:
-    hashes = ArtifactHashes(
-        engine=sha256_file(cfg.engine),
-        bar_content=sha256_file(cfg.bar_content),
-        overlay=sha256_file(cfg.overlay),
-        map=sha256_file(cfg.map),
-        startscript=sha256_file(cfg.startscript),
-    )
-    map_filename = cfg.map.name
-    wheel_filename = wheel.name
-    local = {
-        "engine.tar.gz": cfg.engine,
-        "bar-content.tar.gz": cfg.bar_content,
-        "overlay.tar.gz": cfg.overlay,
-        map_filename: cfg.map,
-        "startscript.txt": cfg.startscript,
-        wheel_filename: wheel,
+def plan(
+    cfg: BatchConfig,
+    job_uid: str,
+    *,
+    cat: Catalog,
+    overlay: Path,
+    wheel: Path,
+) -> UploadPlan:
+    engine = cat.engine(cfg.engine_name)
+    bar = cat.bar_content(cfg.bar_content_name)
+    mp = cat.map(cfg.map_name)
+
+    _, engine_key = key_from_uri(engine.dest_uri)
+    _, bar_key = key_from_uri(bar.dest_uri)
+    _, map_key = key_from_uri(mp.dest_uri)
+    map_filename = Path(map_key).name
+
+    job_uploads = {
+        "overlay.tar.gz": overlay,
+        "startscript.txt": cfg.scenario_dir / "startscript.txt",
+        wheel.name: wheel,
     }
     return UploadPlan(
-        hashes=hashes,
-        wheel_hash=sha256_file(wheel),
-        wheel_filename=wheel_filename,
+        names=ArtifactNames(
+            engine=cfg.engine_name,
+            bar_content=cfg.bar_content_name,
+            map=cfg.map_name,
+        ),
+        shared_keys={"engine": engine_key, "bar_content": bar_key, "map": map_key},
         map_filename=map_filename,
+        wheel_filename=wheel.name,
         key_prefix=f"{job_uid}/",
-        local_paths=local,
+        job_uploads=job_uploads,
     )
 
 
@@ -98,25 +102,65 @@ def manifest_bytes(cfg: BatchConfig, job_uid: str, plan_: UploadPlan) -> bytes:
         "region": cfg.region,
         "instance_type": cfg.machine_type,
         "map_filename": plan_.map_filename,
-        "artifact_hashes": plan_.hashes.model_dump(),
+        "artifact_names": plan_.names.model_dump(),
+        "paths": plan_.shared_keys,
         "wheel_filename": plan_.wheel_filename,
-        "wheel_sha256": plan_.wheel_hash,
     }
     return json.dumps(body, indent=2, sort_keys=True).encode()
 
 
-def upload(bucket_name: str, plan_: UploadPlan, manifest: bytes, *, client=None) -> None:
-    """Upload the six files + manifest.json under `<job_uid>/`.
+def ensure_and_upload(
+    bucket_name: str,
+    cfg: BatchConfig,
+    plan_: UploadPlan,
+    manifest: bytes,
+    *,
+    cat: Catalog,
+    project: str | None = None,
+    client=None,
+    on_upload: Callable[[str, bool], None] | None = None,
+) -> None:
+    """Ensure shared blobs exist in the bucket (build+upload on miss),
+    then upload per-job blobs + manifest unconditionally.
 
-    `client` defaults to a real `google.cloud.storage.Client`; inject in tests.
+    `on_upload(uri, cached)` fires for every bucket key touched.
     """
     if client is None:
-        from google.cloud import storage  # imported lazily so tests don't need creds
+        from google.cloud import storage  # lazy import so tests don't need creds
 
-        client = storage.Client()
+        client = storage.Client(project=project)
+    if on_upload is None:
+        def on_upload(uri: str, cached: bool) -> None:
+            verb = "cached" if cached else "uploading"
+            print(f"[run] {verb} → {uri}", file=sys.stderr)
+
     bucket = client.bucket(bucket_name)
-    for name, src in plan_.local_paths.items():
-        blob = bucket.blob(plan_.key_prefix + name)
-        blob.upload_from_filename(str(src))
-    manifest_blob = bucket.blob(plan_.key_prefix + "manifest.json")
-    manifest_blob.upload_from_string(manifest, content_type="application/json")
+
+    def _ensure_shared(kind: str, ensure_local: Callable[[], Path]) -> None:
+        key = plan_.shared_keys[kind]
+        uri = f"gs://{bucket_name}/{key}"
+        blob = bucket.blob(key)
+        if blob.exists():
+            on_upload(uri, True)
+            return
+        local = ensure_local()
+        on_upload(uri, False)
+        blob.upload_from_filename(str(local))
+
+    scratch = build.workdir()
+    _ensure_shared("engine", lambda: build.build_engine(cat.engine(cfg.engine_name), scratch))
+    _ensure_shared(
+        "bar_content",
+        lambda: build.build_bar_content(cat.bar_content(cfg.bar_content_name), scratch),
+    )
+    _ensure_shared("map", lambda: build.fetch_map(cat.map(cfg.map_name), scratch))
+
+    for name, src in plan_.job_uploads.items():
+        key = plan_.key_prefix + name
+        uri = f"gs://{bucket_name}/{key}"
+        on_upload(uri, False)
+        bucket.blob(key).upload_from_filename(str(src))
+
+    manifest_key = plan_.key_prefix + "manifest.json"
+    on_upload(f"gs://{bucket_name}/{manifest_key}", False)
+    bucket.blob(manifest_key).upload_from_string(manifest, content_type="application/json")
