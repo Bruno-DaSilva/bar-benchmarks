@@ -1,3 +1,10 @@
+> [!IMPORTANT]
+> NOTE TO READERS: This has been **vibe coded** with claude code. It's currently treated like a throw away prototype. 
+> 
+> Should [the proposal](https://github.com/beyond-all-reason/RecoilEngine/issues/2948) get traction, this will be thoroughly reviewed/likely redesigned from the prototype's learnings.
+
+
+
 # bar-benchmarks
 
 Run [Beyond All Reason](https://www.beyondallreason.info/) game scenarios across
