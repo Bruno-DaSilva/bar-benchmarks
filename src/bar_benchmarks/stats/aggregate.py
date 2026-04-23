@@ -65,6 +65,9 @@ def summarize(
     median = statistics.median(sim_ms) if sim_ms else None
     p95 = _p95(sim_ms)
 
+    instance_type = results[0].instance_type if results else None
+    region = results[0].region if results else None
+
     return BatchReport(
         job_uid=job_uid,
         run_description=run_description,
@@ -77,6 +80,8 @@ def summarize(
         sim_mean_ms_stddev=stddev,
         sim_mean_ms_median=median,
         sim_mean_ms_p95=p95,
+        instance_type=instance_type,
+        region=region,
     )
 
 
@@ -193,4 +198,25 @@ def print_report(report: BatchReport) -> None:
             f"median= {report.sim_mean_ms_median:.3f}ms  "
             f"p95= {report.sim_mean_ms_p95:.3f}ms  "
             f"(vms= {len(report.per_vm)}{frames_hint})"
+        )
+    _print_cost(report)
+
+
+def _print_cost(report: BatchReport) -> None:
+    if report.cached:
+        print("compute: $0.000 (cached run)")
+        return
+    if report.total_billable_s is None:
+        return
+    shape = f"{report.instance_type}/{report.region}"
+    if report.compute_usd is not None and report.price_per_vm_hour_usd is not None:
+        print(
+            f"compute: ${report.compute_usd:.3f}  "
+            f"(billable= {report.total_billable_s:.0f}s "
+            f"@ ${report.price_per_vm_hour_usd:.6f}/hr, {shape} spot)"
+        )
+    else:
+        print(
+            f"compute: no spot price for {shape}; "
+            f"billable= {report.total_billable_s:.0f}s"
         )

@@ -118,9 +118,10 @@ def stats_cmd(
     ),
 ) -> None:
     """Aggregate a completed batch's results from GCS."""
-    from bar_benchmarks.stats import aggregate
+    from bar_benchmarks.stats import aggregate, cost
 
     report = aggregate.from_bucket(results_bucket, job_uid, submitted=submitted, project=project)
+    report = cost.apply_from_batch_api(report, project=project)
     aggregate.print_report(report)
 
 
@@ -152,7 +153,7 @@ def lookup_cmd(
     append to $GITHUB_OUTPUT). Always exits 0; inspect the `hit=` line.
     """
     from bar_benchmarks.orchestrator import lookup as lookup_mod
-    from bar_benchmarks.stats import aggregate
+    from bar_benchmarks.stats import aggregate, cost
 
     import sys
 
@@ -199,6 +200,7 @@ def lookup_cmd(
         project=project,
         run_description=match.get("run_description"),
     )
+    report = cost.apply_cached(report)
     report_json.write_text(report.model_dump_json(indent=2))
     print(
         f"[lookup] wrote cached BatchReport → {report_json} "

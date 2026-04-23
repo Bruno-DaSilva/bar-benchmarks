@@ -15,7 +15,7 @@ from google.cloud import batch_v1
 
 from bar_benchmarks.orchestrator import artifacts, batch_submitter
 from bar_benchmarks.orchestrator.catalog import Catalog
-from bar_benchmarks.stats import aggregate
+from bar_benchmarks.stats import aggregate, cost
 from bar_benchmarks.types import BatchConfig, BatchReport
 
 _TERMINAL_JOB_STATES = {
@@ -182,6 +182,7 @@ def run(cfg: BatchConfig, *, report_json_path: Path | None = None) -> BatchRepor
         project=cfg.project,
         run_description=cfg.run_description,
     )
+    report = cost.apply_from_batch_api(report, project=cfg.project)
     aggregate.print_report(report)
     if report_json_path is not None:
         report_json_path.write_text(report.model_dump_json(indent=2))

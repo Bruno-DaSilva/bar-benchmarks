@@ -21,6 +21,9 @@ def _r(
     spread_ms: float | None = None,
     stddev_ms: float | None = None,
     count: int | None = None,
+    instance_type: str = "n1-standard-8",
+    region: str = "us-west4",
+    engine_wall_s: float | None = None,
 ) -> Result:
     benchmark: dict = {}
     if sim_mean_ms is not None:
@@ -35,8 +38,8 @@ def _r(
     return Result(
         batch_id="job-1",
         vm_id=vm_id,
-        instance_type="n1-standard-8",
-        region="us-west4",
+        instance_type=instance_type,
+        region=region,
         artifact_names=ArtifactNames(
             engine="recoil-abc1234",
             bar_content="bar-test-29871-90f4bc1",
@@ -46,6 +49,7 @@ def _r(
             started_at=datetime(2026, 4, 20, tzinfo=UTC),
             ended_at=datetime(2026, 4, 20, tzinfo=UTC),
             engine_exit=0 if valid else 1,
+            engine_wall_s=engine_wall_s,
         ),
         benchmark=benchmark,
         invalid_reason=reason if not valid else None,
@@ -117,6 +121,31 @@ def test_summarize_stddev_is_none_when_runs_missing_stddev():
     report = aggregate.summarize(results, submitted=2, job_uid="job-6")
     assert report.sim_mean_ms_mean == 20.0
     assert report.sim_mean_ms_stddev is None
+
+
+def test_summarize_carries_shape_from_first_result():
+    # instance_type / region are taken off the first Result so the cost
+    # stage knows what shape to price. The single-spec batch invariant
+    # makes "first" well-defined.
+    results = [
+        _r(
+            20.0,
+            vm_id=f"{i}-0",
+            count=100,
+            stddev_ms=3.0,
+            instance_type="c2d-standard-16",
+            region="us-central1",
+        )
+        for i in range(3)
+    ]
+    report = aggregate.summarize(results, submitted=3, job_uid="job-shape")
+    assert report.instance_type == "c2d-standard-16"
+    assert report.region == "us-central1"
+    # summarize() does not compute cost itself; the stats/cost module
+    # attaches those fields via the Batch API.
+    assert report.total_billable_s is None
+    assert report.compute_usd is None
+    assert report.cached is False
 
 
 def test_summarize_skips_results_missing_sim_metric():
