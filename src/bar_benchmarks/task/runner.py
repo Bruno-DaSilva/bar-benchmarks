@@ -121,7 +121,7 @@ def run() -> RunnerVerdict:
         started_at=started_at,
         ended_at=ended_at,
         engine_exit=engine_exit,
-        timings={"engine_wall_s": wall},
+        engine_wall_s=wall,
         benchmark_output_path=bench_out,
         error=error,
     )

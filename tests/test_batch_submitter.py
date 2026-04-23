@@ -89,7 +89,7 @@ def test_job_shape_snapshot():
     # doesn't pip-install it anymore.
     assert "pip install --no-cache-dir --target" in batch_submitter.BOOTSTRAP_SCRIPT
     assert "--target \"$root/pypkgs\" pydantic" not in batch_submitter.BOOTSTRAP_SCRIPT
-    assert list(main.container.commands[len(wrapper_prefix):]) == [expected_python, "-m", "bar_benchmarks.task.main"]
+    assert list(main.container.commands[len(wrapper_prefix):]) == [expected_python, "-m", "bar_benchmarks.task.runner"]
     assert coll.always_run is True
     assert list(coll.container.commands[len(wrapper_prefix):]) == [expected_python, "-m", "bar_benchmarks.task.collector"]
 

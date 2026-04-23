@@ -46,7 +46,6 @@ def _r(
             started_at=datetime(2026, 4, 20, tzinfo=UTC),
             ended_at=datetime(2026, 4, 20, tzinfo=UTC),
             engine_exit=0 if valid else 1,
-            timings={},
         ),
         benchmark=benchmark,
         valid=valid,

@@ -10,16 +10,23 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
+from google.cloud import batch_v1
+
 from bar_benchmarks.orchestrator import (
     artifacts,
     batch_submitter,
-    poller,
-    reconcile,
     run_info,
 )
 from bar_benchmarks.orchestrator.catalog import Catalog
 from bar_benchmarks.stats import aggregate
 from bar_benchmarks.types import BatchConfig, BatchReport
+
+_TERMINAL_JOB_STATES = {
+    batch_v1.JobStatus.State.SUCCEEDED,
+    batch_v1.JobStatus.State.FAILED,
+    batch_v1.JobStatus.State.CANCELLED,
+    batch_v1.JobStatus.State.DELETION_IN_PROGRESS,
+}
 
 
 def _project_root() -> Path:
@@ -51,6 +58,38 @@ def _pack_overlay(scenario_dir: Path) -> Path:
             check=True, stdout=sys.stdout, stderr=sys.stderr,
         )
     return tmp
+
+
+def _wait_for_terminal(job_name: str, *, interval_s: float = 15.0) -> batch_v1.Job:
+    client = batch_v1.BatchServiceClient()
+    while True:
+        job = client.get_job(name=job_name)
+        print(f"[run] state={job.status.state.name}", file=sys.stderr)
+        if job.status.state in _TERMINAL_JOB_STATES:
+            return job
+        time.sleep(interval_s)
+
+
+def _missing_task_indices(
+    results_bucket: str, job_uid: str, submitted: int, *, project: str | None = None
+) -> list[int]:
+    """Return the sorted list of task indices that never uploaded results.json."""
+    from google.cloud import storage
+
+    client = storage.Client(project=project)
+    bucket_name = results_bucket.removeprefix("gs://")
+    bucket = client.bucket(bucket_name)
+    prefix = f"{job_uid}/"
+    present: set[int] = set()
+    for blob in client.list_blobs(bucket, prefix=prefix):
+        # Expect key: <job_uid>/<task_index>/results.json
+        parts = blob.name[len(prefix):].split("/")
+        if len(parts) == 2 and parts[1] == "results.json":
+            try:
+                present.add(int(parts[0]))
+            except ValueError:
+                continue
+    return sorted(set(range(submitted)) - present)
 
 
 def run(cfg: BatchConfig) -> BatchReport:
@@ -90,18 +129,12 @@ def run(cfg: BatchConfig) -> BatchReport:
     job = batch_submitter.submit(cfg, job_id=job_uid)
     print(f"[run] submitted: {job.name}", file=sys.stderr)
 
-    def _log(j):
-        print(f"[run] state={j.status.state.name}", file=sys.stderr)
-
-    final = poller.wait(job.name, on_update=_log)
+    final = _wait_for_terminal(job.name)
     print(f"[run] terminal state: {final.status.state.name}", file=sys.stderr)
 
-    rec = reconcile.reconcile(cfg.results_bucket, job_uid, cfg.count, project=cfg.project)
-    if rec.missing_indices:
-        print(
-            f"[run] missing results for task indices: {rec.missing_indices}",
-            file=sys.stderr,
-        )
+    missing = _missing_task_indices(cfg.results_bucket, job_uid, cfg.count, project=cfg.project)
+    if missing:
+        print(f"[run] missing results for task indices: {missing}", file=sys.stderr)
 
     report = aggregate.from_bucket(
         cfg.results_bucket,

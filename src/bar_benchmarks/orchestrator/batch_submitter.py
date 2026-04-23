@@ -185,7 +185,7 @@ def build_job(
     image = cfg.container_image
     runnables = [
         _container_runnable(["/bin/sh", "-c", BOOTSTRAP_SCRIPT], image=image),
-        _container_runnable(["python3", "-m", "bar_benchmarks.task.main"], image=image),
+        _container_runnable(["python3", "-m", "bar_benchmarks.task.runner"], image=image),
         _container_runnable(
             ["python3", "-m", "bar_benchmarks.task.collector"],
             image=image,

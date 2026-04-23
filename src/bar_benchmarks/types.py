@@ -26,7 +26,7 @@ class RunnerVerdict(BaseModel):
     started_at: datetime
     ended_at: datetime
     engine_exit: int
-    timings: dict[str, float] = Field(default_factory=dict)
+    engine_wall_s: float | None = None
     benchmark_output_path: str | None = None
     error: str | None = None
 

@@ -47,11 +47,6 @@ def benchmark_output_path() -> Path:
     return data_dir() / rel
 
 
-def batch_job_uid() -> str | None:
-    """Injected by Batch on the VM; None when running on a dev machine."""
-    return os.environ.get("BATCH_JOB_UID")
-
-
 def batch_task_index() -> str:
     """Injected by Batch on the VM; defaults to '0' for dev smoke runs."""
     return os.environ.get("BATCH_TASK_INDEX", "0")

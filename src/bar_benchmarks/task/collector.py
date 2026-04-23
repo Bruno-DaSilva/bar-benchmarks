@@ -37,7 +37,6 @@ def _verdict() -> RunnerVerdict:
             started_at=now,
             ended_at=now,
             engine_exit=-1,
-            timings={},
             benchmark_output_path=None,
             error="runner_did_not_run",
         )
