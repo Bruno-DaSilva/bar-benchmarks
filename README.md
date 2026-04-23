@@ -3,14 +3,12 @@
 Run [Beyond All Reason](https://www.beyondallreason.info/) game scenarios across
 multiple ephemeral cloud VMs for repeatable performance measurement.
 
-> **Status:** MVP scaffold implemented. The orchestrator, runner, collector,
-> stats, and CLI are real; **preflight and poison-monitor are stubs** that
-> let the harness run end-to-end without rejecting VMs or invalidating runs.
-> Cloud smoke-test against a real GCP project is the next step — see
-> "Prerequisites" below. For component-level design see
-> [ARCHITECTURE.md](./ARCHITECTURE.md); for per-invocation cost math see
-> [COSTS.md](./COSTS.md); for agent guidance and open questions see
-> [CLAUDE.md](./CLAUDE.md).
+> **Status:** MVP scaffold implemented. Orchestrator, runner, collector,
+> stats, and CLI are real. Cloud smoke-test against a real GCP project
+> is the next step — see "Prerequisites" below. For component-level
+> design see [ARCHITECTURE.md](./ARCHITECTURE.md); for per-invocation
+> cost math see [COSTS.md](./COSTS.md); for agent guidance and open
+> questions see [CLAUDE.md](./CLAUDE.md).
 
 ## What it does
 
@@ -18,10 +16,8 @@ Given a fixed set of BAR artifacts and a scenario, `bar-benchmarks` submits a
 [GCP Batch](https://cloud.google.com/batch/docs) job that spins up a
 configurable number of identically-specced VMs (one per run), runs the scenario
 on each, and collects per-VM timing data into `results.json` files in a GCS
-bucket. It watches each run for environmental "poisons" (e.g. high CPU steal
-from the hypervisor) and invalidates any run whose environment was bad, so the
-final statistics reflect only clean runs. After all Tasks finish, the results
-are aggregated into basic summary stats.
+bucket. After all Tasks finish, the results are aggregated into basic
+summary stats.
 
 ## Input artifacts
 
@@ -59,10 +55,7 @@ For each batch:
    location the VMs can pull from.
 2. **Spawn VMs** — provision N cloud VMs with identical instance type, image,
    and region class.
-3. **Pre-flight check** — each VM runs a short microbenchmark against a known
-   baseline. VMs that fall outside spec are abandoned (noisy-neighbor filter)
-   before the real run starts.
-4. **Run scenario** — each surviving VM extracts the engine tarball to
+3. **Run scenario** — each VM extracts the engine tarball to
    `/opt/recoil/`, stages `BAR.sdd` under `/var/bar-data/games/`, extracts
    the overlay on top of `/var/bar-data/` (which overrides `BAR.sdd/`
    content and drops any extra files alongside), places the map under
@@ -70,27 +63,11 @@ For each batch:
    `spring-headless --isolation --write-dir /var/bar-data <startscript>`.
    Benchmark data is written by the overlay to a JSON file inside the
    write-dir.
-5. **Poison monitoring** — throughout the run, host-level signals (CPU steal,
-   etc.) are sampled. If any poison threshold is tripped, the run is marked
-   invalid.
-6. **Collect results** — each VM writes a `results.json` and uploads it to the
+4. **Collect results** — each VM writes a `results.json` and uploads it to the
    batch's results location. Invalid runs still upload, but flagged as such.
-7. **Teardown** — all VMs are destroyed. No persistent infra.
-8. **Aggregate stats** — a post-processing step parses the valid `results.json`
+5. **Teardown** — all VMs are destroyed. No persistent infra.
+6. **Aggregate stats** — a post-processing step parses the valid `results.json`
    files and emits summary statistics for the batch.
-
-## Poisons
-
-A "poison" is a signal that the VM's environment — not the code under test —
-was the dominant cause of observed performance. A poisoned run is dropped from
-the aggregate, not repaired. Canonical example:
-
-- **CPU steal %** — the hypervisor scheduling the instance's vCPUs onto the
-  physical host below some fraction of wall time. High steal indicates a noisy
-  neighbor on the hypervisor.
-
-The full set of poison signals and thresholds is still being decided — see
-[CLAUDE.md](./CLAUDE.md).
 
 ## Output
 
@@ -205,5 +182,3 @@ Not yet decided; tracked in [CLAUDE.md](./CLAUDE.md):
 - Runtime-dependency set for `spring-headless` on the VM image
   (discover-then-freeze on first run — expect `missing_runtime_deps`
   until this settles)
-- Real pre-flight microbenchmark (currently stubbed to always pass)
-- Full poison signal set and thresholds (monitor currently stubbed)

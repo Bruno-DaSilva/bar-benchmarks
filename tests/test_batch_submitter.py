@@ -52,12 +52,12 @@ def test_job_shape_snapshot():
     assert mounts["/mnt/disks/artifacts-bucket"] == "bar-experiments-bench-artifacts"
     assert mounts["/mnt/disks/results"] == "bar-experiments-bench-results/job-xyz"
 
-    # Four container runnables in order: bootstrap, poison (bg+alwaysRun),
-    # main, collector (alwaysRun). Each task carves out its own
+    # Three container runnables in order: bootstrap, main, collector
+    # (alwaysRun). Each task carves out its own
     # /var/bar-scratch/tasks/$BATCH_TASK_INDEX subtree at runtime via the
     # PER_TASK_ENV_WRAPPER, so multiple tasks can share one VM.
-    assert len(spec.runnables) == 4
-    boot, poison, main, coll = spec.runnables
+    assert len(spec.runnables) == 3
+    boot, main, coll = spec.runnables
     expected_image = batch_submitter.CONTAINER_IMAGE
     assert expected_image.startswith(
         "us-central1-docker.pkg.dev/bar-experiments/benchmarks/batch-runtime:"
@@ -89,9 +89,6 @@ def test_job_shape_snapshot():
     # doesn't pip-install it anymore.
     assert "pip install --no-cache-dir --target" in batch_submitter.BOOTSTRAP_SCRIPT
     assert "--target \"$root/pypkgs\" pydantic" not in batch_submitter.BOOTSTRAP_SCRIPT
-    assert poison.background is True
-    assert poison.always_run is True
-    assert list(poison.container.commands[len(wrapper_prefix):]) == [expected_python, "-m", "bar_benchmarks.poison.monitor"]
     assert list(main.container.commands[len(wrapper_prefix):]) == [expected_python, "-m", "bar_benchmarks.task.main"]
     assert coll.always_run is True
     assert list(coll.container.commands[len(wrapper_prefix):]) == [expected_python, "-m", "bar_benchmarks.task.collector"]

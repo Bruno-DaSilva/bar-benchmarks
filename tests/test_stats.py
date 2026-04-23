@@ -8,8 +8,6 @@ import pytest
 from bar_benchmarks.stats import aggregate
 from bar_benchmarks.types import (
     ArtifactNames,
-    PoisonSummary,
-    PreflightResult,
     Result,
     RunnerVerdict,
 )
@@ -44,7 +42,6 @@ def _r(
             bar_content="bar-test-29871-90f4bc1",
             map="hellas-basin-v1.4",
         ),
-        preflight=PreflightResult(passed=True),
         run=RunnerVerdict(
             started_at=datetime(2026, 4, 20, tzinfo=UTC),
             ended_at=datetime(2026, 4, 20, tzinfo=UTC),
@@ -52,7 +49,6 @@ def _r(
             timings={},
         ),
         benchmark=benchmark,
-        poison=PoisonSummary(tripped=False),
         valid=valid,
         invalid_reason=reason,
     )

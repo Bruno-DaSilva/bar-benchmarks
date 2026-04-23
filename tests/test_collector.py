@@ -4,16 +4,13 @@ import json
 from datetime import UTC, datetime
 
 from bar_benchmarks.task import collector
-from bar_benchmarks.types import PoisonSummary, PreflightResult, RunnerVerdict
+from bar_benchmarks.types import RunnerVerdict
 
 
-def _write_inputs(task_env, *, preflight_ok=True, error=None, tripped=False, has_bench=True):
+def _write_inputs(task_env, *, error=None, has_bench=True):
     run = task_env["run"]
     data = task_env["data"]
 
-    (run / "preflight.json").write_text(
-        json.dumps(PreflightResult(passed=preflight_ok).model_dump())
-    )
     verdict = RunnerVerdict(
         started_at=datetime(2026, 4, 20, tzinfo=UTC),
         ended_at=datetime(2026, 4, 20, 0, 0, 30, tzinfo=UTC),
@@ -23,7 +20,6 @@ def _write_inputs(task_env, *, preflight_ok=True, error=None, tripped=False, has
         error=error,
     )
     (run / "verdict.json").write_text(json.dumps(verdict.model_dump(mode="json")))
-    (run / "poison.json").write_text(json.dumps(PoisonSummary(tripped=tripped).model_dump()))
     if has_bench:
         (data / "benchmark-results.json").write_text(json.dumps({"frames": 10, "fps": 60}))
 
@@ -43,18 +39,11 @@ def test_collector_happy_path(task_env, tiny_artifacts):
     assert on_disk["artifact_names"]["engine"] == "recoil-test"
 
 
-def test_collector_preflight_failed(task_env, tiny_artifacts):
-    _write_inputs(task_env, preflight_ok=False)
+def test_collector_engine_crash_marks_invalid(task_env, tiny_artifacts):
+    _write_inputs(task_env, error="engine_crash")
     result = collector.run()
     assert result.valid is False
-    assert result.invalid_reason == "preflight_failed"
-
-
-def test_collector_poisoned_overrides_engine_crash(task_env, tiny_artifacts):
-    _write_inputs(task_env, error="engine_crash", tripped=True)
-    result = collector.run()
-    assert result.valid is False
-    assert result.invalid_reason == "poisoned"
+    assert result.invalid_reason == "engine_crash"
 
 
 def test_collector_uploads_infolog_when_present(task_env, tiny_artifacts):
@@ -70,7 +59,6 @@ def test_collector_uploads_infolog_when_present(task_env, tiny_artifacts):
 
 def test_collector_skips_infolog_when_absent(task_env, tiny_artifacts):
     _write_inputs(task_env)
-    # No infolog written (e.g., engine never started).
 
     collector.run()
 
@@ -78,13 +66,6 @@ def test_collector_skips_infolog_when_absent(task_env, tiny_artifacts):
 
 
 def test_collector_missing_verdict(task_env, tiny_artifacts):
-    # Simulate: runner never wrote verdict.json (e.g., preflight skipped it).
-    (task_env["run"] / "preflight.json").write_text(
-        json.dumps(PreflightResult(passed=True).model_dump())
-    )
-    (task_env["run"] / "poison.json").write_text(
-        json.dumps(PoisonSummary(tripped=False).model_dump())
-    )
     result = collector.run()
     assert result.valid is False
     assert result.invalid_reason == "runner_did_not_run"

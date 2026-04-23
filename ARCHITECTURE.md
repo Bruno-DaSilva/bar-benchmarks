@@ -23,8 +23,8 @@ polls its state. Batch owns:
   buckets into each Task.
 - Streaming stdout/stderr to Cloud Logging, tagged with task index.
 - Tearing down VMs on Task exit.
-- Optional automatic retry of failed Tasks (we disable retry for
-  poison-invalidated runs — see Failure modes).
+- Optional automatic retry of failed Tasks (we disable retry — see
+  Failure modes).
 
 Each **Task** maps 1:1 to one benchmark run on one VM.
 
@@ -44,13 +44,10 @@ Each **Task** maps 1:1 to one benchmark run on one VM.
                              ▼    │
 ┌────────────── GCP Batch Task (×N, one VM each) ──────────────────┐
 │                                                                  │
-│   poison-monitor (background runnable, alwaysRun)                │
-│          │                                                       │
-│          ▼                                                       │
-│   task script: preflight ──► runner ──► engine(startscript.txt)  │
-│                                           │                      │
-│                                           ▼                      │
-│                                      collector ──► GCS           │
+│   task script: runner ──► engine(startscript.txt)                │
+│                              │                                   │
+│                              ▼                                   │
+│                         collector ──► GCS                        │
 │                                                                  │
 │   (artifacts + results GCS buckets mounted via Cloud Storage FUSE) │
 │                                                                  │
@@ -61,7 +58,7 @@ Each **Task** maps 1:1 to one benchmark run on one VM.
 
 ### `orchestrator` (control host, Python)
 
-- Parses the batch config (artifacts, N, instance spec, poison thresholds).
+- Parses the batch config (artifacts, N, instance spec).
 - Resolves engine / bar-content / map catalog names against
   `scripts/artifacts.toml`, checks whether each blob already lives at
   its content-stable bucket key, and builds+uploads on a miss (via
@@ -80,24 +77,14 @@ Each **Task** maps 1:1 to one benchmark run on one VM.
 - Pins the allocation policy: N1 machine type, `minCpuPlatform: "Intel
   Skylake"`, `provisioningModel: SPOT`, 50 GB boot disk.
 - Declares GCS volume mounts for the artifacts and results buckets.
-- Declares the Task's runnables: background poison-monitor + the main task
-  script.
+- Declares the Task's runnables: the main task script + the collector.
 - Kept as a thin layer so swapping to another Batch-style runner later is
   mechanical; not designed as a portable cloud abstraction.
 
-Task-side components are Python modules under `bar_benchmarks.task` and
-`bar_benchmarks.poison`, invoked by the Batch runnables as
-`python -m bar_benchmarks.task.<name>`.
+Task-side components are Python modules under `bar_benchmarks.task`,
+invoked by the Batch runnables as `python -m bar_benchmarks.task.<name>`.
 
-### `preflight` (Task-side, first step of the task script)
-
-- Runs a short, fixed microbenchmark on the fresh VM before any real work.
-- Compares against a stored baseline for that instance type.
-- If the VM is outside spec, sets `preflight_passed = false` in the Task's
-  local verdict file and skips the runner. The collector still runs so the
-  invalid result is uploaded.
-
-### `runner` (Task-side, second step of the task script)
+### `runner` (Task-side, the task script)
 
 Reads artifacts from the mounted GCS bucket at `/mnt/artifacts/` (Cloud
 Storage FUSE — POSIX reads, no fetch code) and stages them on local
@@ -126,32 +113,18 @@ authored `startscript.txt` ends naturally (game-over triggers or scenario
 timeout) and the engine exits on its own. Batch's `maxRunDuration` is the
 outer safety net.
 
-### `poison-monitor` (Task-side, background runnable)
-
-- Declared as a separate Batch runnable with `background: true` and
-  `alwaysRun: true`, so it starts before the task script and keeps running
-  even if an earlier step exits non-zero.
-- Samples host-visible signals at a fixed interval. Canonical signal: CPU
-  steal % from `/proc/stat`. Additional signals are open (see CLAUDE.md).
-- Applies threshold logic: sustained breach over a rolling window trips the
-  run. Transient spikes do not.
-- Writes a rolling poison summary to a known path on the VM; the collector
-  reads it at the end.
-
 ### `collector` (Task-side, final step of the task script, `alwaysRun: true`)
 
-Merges four inputs into the task's final `results.json`:
+Merges two inputs into the task's final `results.json`:
 
-- `/var/bar-run/preflight.json` — preflight verdict + microbench numbers.
 - `/var/bar-run/verdict.json` — runner summary, engine exit code, timings.
-- `/var/bar-run/poison.json` — poison-monitor's rolling summary.
 - `/var/bar-data/benchmark-results.json` — the overlay's benchmark output,
   embedded verbatim under the `benchmark` key.
 
 Writes the merged `results.json` to `/mnt/results/` (GCS FUSE) under a
 deterministic key (`<job_uid>/<task_index>/results.json`). Runs on every
-terminal path — preflight failure, engine crash, poison trip, or clean
-success — so invalidation is visible, not silent.
+terminal path — engine crash or clean success — so invalidation is
+visible, not silent.
 
 ### `stats` (control host)
 
@@ -198,8 +171,6 @@ Lua gadgets/widgets decide to emit.
   infolog.txt            (engine log)
 
 /var/bar-run/            (local — task scratch)
-  preflight.json
-  poison.json
   verdict.json
 ```
 
@@ -256,14 +227,11 @@ QUEUED → SCHEDULED → RUNNING → SUCCEEDED
 **Inner states within a RUNNING Task (task-script-owned):**
 
 ```
-poison-monitor starts (background)
-        │
-        ▼
- preflight ──► runner ──► collector
-     │             │          ▲
-     ▼             ▼          │
- preflight_failed poisoned ───┘
-                (collector still runs and uploads; alwaysRun)
+ runner ──► collector
+     │          ▲
+     ▼          │
+ engine_crash ──┘
+            (collector still runs and uploads; alwaysRun)
 ```
 
 A Task always terminates with a `results.json` in GCS unless the VM was
@@ -292,10 +260,6 @@ Sketch only; exact schema is TBD.
     "bar_content":   "bar-test-29871-90f4bc1",
     "map":           "hellas-basin-v1.4"
   },
-  "preflight": {
-    "passed":       true,
-    "microbench":   { ... }
-  },
   "run": {
     "started_at":   "...",
     "ended_at":     "...",
@@ -303,10 +267,6 @@ Sketch only; exact schema is TBD.
     "timings":      { ... }
   },
   "benchmark":      { ... },        // overlay-emitted JSON, embedded verbatim
-  "poison": {
-    "tripped":      false,
-    "signals":      { "cpu_steal_pct_max": 0.4, "cpu_steal_pct_mean": 0.1, ... }
-  },
   "valid":          true,
   "invalid_reason": null
 }
@@ -333,10 +293,7 @@ job:
           - gcs: { remotePath: "<results-bucket>/<job-uid>" }
             mountPath: /mnt/results
         runnables:
-          - background: true
-            alwaysRun: true
-            script: { text: "python3 -m bar_benchmarks.poison.monitor" }
-          - script: { text: "python3 -m bar_benchmarks.task.main" }   # preflight → runner
+          - script: { text: "python3 -m bar_benchmarks.task.main" }   # runner
           - alwaysRun: true
             script: { text: "python3 -m bar_benchmarks.task.collector" }
   allocationPolicy:
@@ -350,9 +307,9 @@ job:
 ```
 
 Retry policy is **off** by default. A failed Task does not auto-retry,
-because most failure causes (poison, engine crash) are not fixed by
-rerunning on a different VM within the same batch — they're data points.
-The orchestrator can choose to top up a batch with a second Job if too
+because most failure causes (engine crash) are not fixed by rerunning
+on a different VM within the same batch — they're data points. The
+orchestrator can choose to top up a batch with a second Job if too
 many invalid runs came back.
 
 ## Failure modes
@@ -361,22 +318,18 @@ many invalid runs came back.
 |----------------------------------|---------------------|------------------------------------------|
 | Batch Task scheduling failure    | Batch               | Task ends FAILED with no upload. Orchestrator records slot as `infrastructure_failure` during reconciliation. |
 | Spot preemption mid-run          | Batch               | Task terminates; collector may not run. Slot recorded as `preempted` if no `results.json` lands. |
-| Preflight outside spec           | preflight step      | Task script skips runner, collector uploads with `preflight_failed`. |
 | Missing runtime lib (`spring-headless` fails at startup) | runner step | Engine exits immediately; collector uploads with `missing_runtime_deps`. Common on early runs before the dep set is frozen. |
 | BAR version / startscript mismatch | runner step       | Engine exits with content-not-found error; collector uploads with `bar_version_mismatch`. |
 | Engine crashes / non-zero exit   | runner step         | Task script captures exit code, collector uploads with `engine_crash`. |
 | Overlay didn't write benchmark JSON | runner step      | Engine exited cleanly but the expected output file is missing; collector uploads with `overlay_output_missing`. |
 | Scenario never terminates        | Batch (maxRunDuration) | Task FAILED by timeout. If collector ran, slot flagged `scenario_never_terminated`; otherwise reconciled as `timeout`. |
-| Poison threshold tripped         | poison-monitor      | Monitor writes tripped state; collector uploads with `poisoned`. |
 | Results bucket write fails       | collector           | Retried in-task. If still failing, Task exits non-zero with no upload; orchestrator logs `collector_failure`. |
 
 ## Interfaces to pin down
 
 1. **Results store layout** — object key scheme under the results bucket
    (`<job_uid>/<task_index>/results.json`) and the retention policy.
-2. **Poison signal interface** — each signal is `{ name, sample() → float,
-   threshold, window }`. Adding a signal is one file.
-3. **Task script contract** — the environment variables and mounted paths
-   Batch exposes to the three runnables (`BATCH_JOB_UID`, `BATCH_TASK_INDEX`,
+2. **Task script contract** — the environment variables and mounted paths
+   Batch exposes to the runnables (`BATCH_JOB_UID`, `BATCH_TASK_INDEX`,
    `/mnt/artifacts`, `/mnt/results`). These become the only coupling between
    control-host code and VM-side code.

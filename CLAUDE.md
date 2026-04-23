@@ -10,16 +10,14 @@ touching code or proposing design changes. For component-level design
 `bar-benchmarks` is a harness for running Beyond All Reason (BAR) game
 scenarios across multiple ephemeral cloud VMs and collecting repeatable
 performance measurements. Given five artifacts (content distribution, Lua
-overlay, custom engine, map, startscript) it spawns N identically-specced VMs,
-runs a pre-flight sanity microbenchmark on each, runs the scenario, monitors
-for environmental "poisons" that would contaminate results, uploads a
-`results.json` per VM, and aggregates basic stats over the valid runs. See
-[README.md](./README.md) for the user-facing description.
+overlay, custom engine, map, startscript) it spawns N identically-specced
+VMs, runs the scenario, uploads a `results.json` per VM, and aggregates
+basic stats over the valid runs. See [README.md](./README.md) for the
+user-facing description.
 
 The MVP harness (orchestrator, batch-submitter, task pipeline, collector,
-stats, CLI) is scaffolded under `src/bar_benchmarks/`. **Preflight and
-poison-monitor are stubs**; cloud smoke against a real GCP project is the
-next milestone.
+stats, CLI) is scaffolded under `src/bar_benchmarks/`. Cloud smoke
+against a real GCP project is the next milestone.
 
 ## Engine execution
 
@@ -49,8 +47,8 @@ Full on-disk layout, step-by-step runner flow, and failure modes live in
 
 ## Language and tooling
 
-- **Python 3.11+** for both control-host (orchestrator, stats) and VM-side
-  (task script, poison-monitor) code. Single language across both zones.
+- **Python 3.11+** for both control-host (orchestrator, stats) and
+  VM-side (task script) code. Single language across both zones.
 - **Dependency management:** [`uv`](https://docs.astral.sh/uv/), with
   `pyproject.toml` + `uv.lock`. Lockfile is committed.
 - **GCP SDKs:** `google-cloud-batch` (job submission + polling) and
@@ -68,9 +66,6 @@ Full on-disk layout, step-by-step runner flow, and failure modes live in
 - **Identical specs per batch.** All VMs in a batch share instance type,
   image, and region class. Cross-batch comparison is only meaningful when
   specs match.
-- **Fail-closed on poison.** A run whose environment tripped a poison
-  threshold is dropped from the aggregate. The harness does not retry,
-  re-weight, or otherwise try to "recover" a poisoned run.
 - **Artifacts are opaque inputs.** The harness stages and hashes the five
   input artifacts but never modifies or repacks them.
 - **Invalidation is visible.** Invalid runs still produce a `results.json` —
@@ -88,15 +83,9 @@ provisioner. Full design in [ARCHITECTURE.md](./ARCHITECTURE.md).
   count.
 - **`batch-submitter`** — thin layer that translates a batch config into a
   Batch Job spec (allocation policy, volumes, runnables).
-- **`preflight`** — first step of the Task script; microbenchmark + spec
-  check. On failure the Task continues to the collector (which uploads an
-  invalid-flagged `results.json`).
-- **`runner`** — second step of the Task script; extracts the engine
-  tarball to `/opt/recoil/`, stages `BAR.sdd` + merges the overlay, copies
-  the map, and invokes `spring-headless --isolation --write-dir`.
-- **`poison-monitor`** — Batch background runnable (`background: true`,
-  `alwaysRun: true`); samples CPU steal etc. and writes a rolling summary
-  the collector merges in.
+- **`runner`** — the Task script; extracts the engine tarball to
+  `/opt/recoil/`, stages `BAR.sdd` + merges the overlay, copies the map,
+  and invokes `spring-headless --isolation --write-dir`.
 - **`collector`** — final `alwaysRun` runnable in the Task; writes the
   per-task `results.json` to a mounted results GCS bucket.
 - **`stats`** — post-hoc aggregation over valid runs; emits the batch report.
@@ -106,7 +95,6 @@ provisioner. Full design in [ARCHITECTURE.md](./ARCHITECTURE.md).
 - All VMs in a batch use the same spec.
 - One scenario per batch (one `startscript.txt`, one engine, one overlay, one
   map, one content distribution).
-- Poisoned runs never contribute to aggregate statistics.
 - The harness does not mutate input artifacts.
 
 ## Non-goals
@@ -131,12 +119,6 @@ on one of these, ask the user rather than assuming:
   the first real run, install those via an apt step (or bake a custom
   image), then pin the set. Early Tasks will fail with
   `missing_runtime_deps` until this settles.
-- **Pre-flight microbenchmark.** Off-the-shelf (sysbench, stress-ng), a
-  custom CPU/memory probe, or a short BAR-engine warm-up against a canned
-  scenario.
-- **Full poison signal set.** CPU steal % is the canonical example; the rest
-  (context switches, thermal throttling, memory pressure, network jitter,
-  disk latency) and their thresholds need calibration from real runs.
 
 ## Directory layout
 
@@ -145,8 +127,7 @@ pyproject.toml
 uv.lock
 src/bar_benchmarks/
   orchestrator/   # Batch job build + submit + poll + reconcile
-  task/           # preflight, runner, collector (Python entrypoints)
-  poison/         # poison-monitor (background runnable)
+  task/           # runner, collector (Python entrypoints)
   stats/          # aggregate batch results
   paths.py        # BAR_* env-var resolution shared by task and orchestrator
   cli.py          # `bar-bench` Typer entrypoint

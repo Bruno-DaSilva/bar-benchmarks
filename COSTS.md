@@ -14,7 +14,7 @@ final instance shape is pinned.
 | VM unit price (spot)         | $0.174304 / hr                | us-central1 spot list price.             |
 | Boot disk                    | 50 GB, pd-balanced            | $0.10 / GB-month, billed per second.     |
 | Runs per invocation          | 10                            | One Batch Task per run, taskCount=parallelism=10. |
-| **End-to-end per VM**        | **~6 min** (0.1 hr)           | Includes boot, preflight, scenario, collector, teardown. |
+| **End-to-end per VM**        | **~6 min** (0.1 hr)           | Includes boot, scenario, collector, teardown. |
 
 All 10 VMs run in parallel, so wall-clock per invocation is ~6 min and
 billable VM-time is 10 × 6 min = **1 VM-hour**.
@@ -73,7 +73,7 @@ for the whole bucket; per-invocation share is effectively $0.
 | GCP Batch service fee   | $0.00               |
 | **Total**               | **~$0.19**          |
 
-Round up to **~$0.25 per invocation** to cover preflight re-spawns and slack.
+Round up to **~$0.25 per invocation** to cover slack.
 
 ## Per-suite math (5 scenarios)
 
@@ -125,9 +125,6 @@ These are the knobs that most change the bottom line:
 - **Region.** `us-central1` is already in the cheapest tier. Moving to a
   pricier region (`europe-west1`, `asia-*`) adds 10–20%. Keep the artifact
   bucket co-located to preserve free egress.
-- **Preflight rejections.** A VM that fails preflight still costs the boot
-  + preflight time (~2 min × $0.174304/hr ≈ $0.006 per rejection). Cheap
-  enough that aggressive rejection is fine.
 - **Machine family choice.** `c2d` (AMD EPYC Milan) gives strong
   single-thread performance and good $/perf for CPU-bound workloads.
   `n2` (Intel Ice Lake) and `c3` (Sapphire Rapids) are nearby alternatives

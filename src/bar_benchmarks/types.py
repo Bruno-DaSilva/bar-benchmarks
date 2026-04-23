@@ -20,13 +20,6 @@ class ArtifactNames(_Frozen):
     map: str
 
 
-class PreflightResult(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    passed: bool
-    microbench: dict[str, Any] = Field(default_factory=dict)
-
-
 class RunnerVerdict(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -36,13 +29,6 @@ class RunnerVerdict(BaseModel):
     timings: dict[str, float] = Field(default_factory=dict)
     benchmark_output_path: str | None = None
     error: str | None = None
-
-
-class PoisonSummary(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    tripped: bool
-    signals: dict[str, Any] = Field(default_factory=dict)
 
 
 class Result(BaseModel):
@@ -55,10 +41,8 @@ class Result(BaseModel):
     instance_type: str
     region: str
     artifact_names: ArtifactNames
-    preflight: PreflightResult
     run: RunnerVerdict
     benchmark: dict[str, Any] = Field(default_factory=dict)
-    poison: PoisonSummary
     valid: bool
     invalid_reason: str | None = None
 

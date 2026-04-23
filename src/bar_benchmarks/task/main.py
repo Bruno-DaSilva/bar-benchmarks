@@ -1,14 +1,11 @@
-"""Task-side entrypoint: preflight then (if passed) runner."""
+"""Task-side entrypoint: invoke the runner."""
 
 from __future__ import annotations
 
-from bar_benchmarks.task import preflight, runner
+from bar_benchmarks.task import runner
 
 
 def main() -> int:
-    pf = preflight.run()
-    if not pf.passed:
-        return 0
     runner.run()
     return 0
 

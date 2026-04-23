@@ -106,9 +106,9 @@ ENV_VARS = {
 # Wrapper prefixed to every runnable's command list. Reads the
 # Batch-injected BATCH_TASK_INDEX, exports the four per-task env vars
 # task code reads via bar_benchmarks.paths, then execs the real
-# command. Keeps paths.py + runner/collector/preflight/monitor unaware
-# of co-scheduling — each task sees its own /var/bar-scratch/tasks/$idx
-# subtree as if it owned the VM.
+# command. Keeps paths.py + runner/collector unaware of co-scheduling —
+# each task sees its own /var/bar-scratch/tasks/$idx subtree as if it
+# owned the VM.
 PER_TASK_ENV_WRAPPER = r"""set -eu
 idx="${BATCH_TASK_INDEX:-0}"
 root=/var/bar-scratch/tasks/$idx
@@ -185,12 +185,6 @@ def build_job(
     image = cfg.container_image
     runnables = [
         _container_runnable(["/bin/sh", "-c", BOOTSTRAP_SCRIPT], image=image),
-        _container_runnable(
-            ["python3", "-m", "bar_benchmarks.poison.monitor"],
-            image=image,
-            background=True,
-            always_run=True,
-        ),
         _container_runnable(["python3", "-m", "bar_benchmarks.task.main"], image=image),
         _container_runnable(
             ["python3", "-m", "bar_benchmarks.task.collector"],

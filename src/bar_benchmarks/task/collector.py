@@ -1,4 +1,4 @@
-"""Merge preflight + verdict + poison + overlay benchmark into results.json.
+"""Merge runner verdict + overlay benchmark into results.json.
 
 Runs as the final `alwaysRun` runnable; writes to the GCS-FUSE-mounted
 results directory under `<task_index>/results.json`. The job_uid scoping
@@ -18,8 +18,6 @@ INFOLOG_FILENAME = "infolog.txt"
 from bar_benchmarks import paths
 from bar_benchmarks.types import (
     ArtifactNames,
-    PoisonSummary,
-    PreflightResult,
     Result,
     RunnerVerdict,
 )
@@ -29,13 +27,6 @@ def _load_json(p: Path) -> dict[str, Any] | None:
     if not p.is_file():
         return None
     return json.loads(p.read_text())
-
-
-def _preflight() -> PreflightResult:
-    data = _load_json(paths.run_dir() / "preflight.json")
-    if data is None:
-        return PreflightResult(passed=False, microbench={})
-    return PreflightResult.model_validate(data)
 
 
 def _verdict() -> RunnerVerdict:
@@ -53,25 +44,12 @@ def _verdict() -> RunnerVerdict:
     return RunnerVerdict.model_validate(data)
 
 
-def _poison() -> PoisonSummary:
-    data = _load_json(paths.run_dir() / "poison.json")
-    if data is None:
-        return PoisonSummary(tripped=False, signals={})
-    return PoisonSummary.model_validate(data)
-
-
 def _benchmark() -> dict[str, Any]:
     data = _load_json(paths.benchmark_output_path())
     return data if data is not None else {}
 
 
-def _compute_verdict(
-    preflight: PreflightResult, verdict: RunnerVerdict, poison: PoisonSummary
-) -> tuple[bool, str | None]:
-    if poison.tripped:
-        return False, "poisoned"
-    if not preflight.passed:
-        return False, "preflight_failed"
+def _compute_verdict(verdict: RunnerVerdict) -> tuple[bool, str | None]:
     if verdict.error:
         return False, verdict.error
     return True, None
@@ -81,11 +59,9 @@ def run() -> Result:
     artifacts = paths.artifacts_dir()
     manifest = json.loads((artifacts / "manifest.json").read_text())
 
-    preflight = _preflight()
     verdict = _verdict()
-    poison = _poison()
     benchmark = _benchmark()
-    valid, reason = _compute_verdict(preflight, verdict, poison)
+    valid, reason = _compute_verdict(verdict)
 
     result = Result(
         batch_id=manifest["job_uid"],
@@ -93,10 +69,8 @@ def run() -> Result:
         instance_type=manifest["instance_type"],
         region=manifest["region"],
         artifact_names=ArtifactNames(**manifest["artifact_names"]),
-        preflight=preflight,
         run=verdict,
         benchmark=benchmark,
-        poison=poison,
         valid=valid,
         invalid_reason=reason,
     )

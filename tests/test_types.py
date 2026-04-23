@@ -7,8 +7,6 @@ from pydantic import ValidationError
 
 from bar_benchmarks.types import (
     ArtifactNames,
-    PoisonSummary,
-    PreflightResult,
     Result,
     RunnerVerdict,
 )
@@ -25,14 +23,12 @@ def _result_kwargs():
             bar_content="bar-test-29871-90f4bc1",
             map="hellas-basin-v1.4",
         ),
-        preflight=PreflightResult(passed=True),
         run=RunnerVerdict(
             started_at=datetime(2026, 4, 20, tzinfo=UTC),
             ended_at=datetime(2026, 4, 20, 0, 1, tzinfo=UTC),
             engine_exit=0,
         ),
         benchmark={"frames": 1234},
-        poison=PoisonSummary(tripped=False),
         valid=True,
     )
 

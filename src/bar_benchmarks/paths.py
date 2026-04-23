@@ -32,7 +32,7 @@ def data_dir() -> Path:
 
 
 def run_dir() -> Path:
-    """Local task scratch for preflight.json, verdict.json, poison.json."""
+    """Local task scratch for verdict.json."""
     return _env_path("BAR_RUN_DIR", "/var/bar-run")
 
 
