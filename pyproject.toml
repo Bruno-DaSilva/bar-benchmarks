@@ -8,6 +8,7 @@ dependencies = [
     "typer>=0.12",
     "google-cloud-batch>=0.17",
     "google-cloud-storage>=2.16",
+    "scipy>=1.11",
 ]
 
 [project.scripts]

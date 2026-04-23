@@ -4,7 +4,7 @@ from pathlib import Path
 
 import typer
 
-from bar_benchmarks.types import BatchConfig
+from bar_benchmarks.types import BatchConfig, BatchReport
 
 app = typer.Typer(
     name="bar-bench",
@@ -196,3 +196,37 @@ def lookup_cmd(
     print(f"job-uid={job_uid}")
     if match.get("submitted_at"):
         print(f"submitted-at={match['submitted_at']}")
+
+
+@app.command("compare")
+def compare_cmd(
+    candidate: Path = typer.Option(
+        ..., "--candidate", exists=True, dir_okay=False, readable=True,
+        help="Path to the candidate BatchReport JSON.",
+    ),
+    baseline: Path = typer.Option(
+        ..., "--baseline", exists=True, dir_okay=False, readable=True,
+        help="Path to the baseline BatchReport JSON.",
+    ),
+    output: Path | None = typer.Option(
+        None, "--output", "-o",
+        help="If set, write the ComparisonReport as JSON to this path.",
+    ),
+    alpha: float = typer.Option(
+        0.05, min=1e-6, max=0.5,
+        help="Two-sided significance level; CI confidence is (1 - alpha).",
+    ),
+) -> None:
+    """Welch's t-test comparison of two BatchReports.
+
+    Emits a 95% CI on the per-VM sim mean difference (candidate − baseline)
+    and its rescaling to percent of baseline.
+    """
+    from bar_benchmarks.stats import compare as compare_mod
+
+    cand_report = BatchReport.model_validate_json(candidate.read_text())
+    base_report = BatchReport.model_validate_json(baseline.read_text())
+    cmp = compare_mod.compare(cand_report, base_report, alpha=alpha)
+    compare_mod.print_comparison(cmp)
+    if output is not None:
+        output.write_text(cmp.model_dump_json(indent=2))

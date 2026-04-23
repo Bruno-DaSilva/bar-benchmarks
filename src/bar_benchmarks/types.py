@@ -116,3 +116,36 @@ class BatchReport(BaseModel):
     sim_mean_ms_stddev: float | None = None
     sim_mean_ms_median: float | None = None
     sim_mean_ms_p95: float | None = None
+
+
+class ComparisonReport(BaseModel):
+    """Welch's t-test comparison of candidate vs baseline sim frame time.
+
+    The sample unit is the per-VM sim mean (`PerVmSim.mean_ms`): each VM
+    contributes one observation. CI is the Welch 2-sided interval on the
+    mean difference (candidate − baseline), rescaled to percent of the
+    baseline mean. `significant` is True iff the CI excludes zero.
+
+    Any of the numeric fields may be None when there aren't enough
+    samples on one side (need n ≥ 2 per group) or the baseline mean is
+    zero.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    cand_job_uid: str
+    base_job_uid: str
+    n_cand: int
+    n_base: int
+    cand_mean_ms: float | None = None
+    base_mean_ms: float | None = None
+    delta_ms: float | None = None
+    delta_ms_low: float | None = None
+    delta_ms_high: float | None = None
+    delta_pct: float | None = None
+    delta_pct_low: float | None = None
+    delta_pct_high: float | None = None
+    t_stat: float | None = None
+    df: float | None = None
+    alpha: float = 0.05
+    significant: bool = False
