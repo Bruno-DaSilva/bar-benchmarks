@@ -52,49 +52,6 @@ def _make_cfg(tmp_path: Path) -> tuple[BatchConfig, Path, Path, Path]:
     return cfg, overlay, wheel, catalog
 
 
-def test_plan_uses_catalog_keys(tmp_path):
-    cfg, overlay, wheel, catalog = _make_cfg(tmp_path)
-    cat = Catalog.load(catalog)
-    plan = artifacts.plan(cfg, "job-xyz", cat=cat, overlay=overlay, wheel=wheel)
-
-    assert plan.map_filename == "tiny.sd7"
-    assert plan.key_prefix == "job-xyz/"
-    assert plan.shared_keys == {
-        "engine": "engine/recoil-test.tar.gz",
-        "bar_content": "bar-content/bar-test.tar.gz",
-        "map": "maps/tiny.sd7",
-    }
-    assert plan.job_uploads["overlay.tar.gz"] == overlay
-    assert plan.job_uploads["startscript.txt"] == cfg.scenario_dir / "startscript.txt"
-    assert plan.job_uploads[wheel.name] == wheel
-    assert plan.names.engine == "recoil-test"
-    assert plan.names.bar_content == "bar-test"
-    assert plan.names.map == "tiny-v1"
-
-
-def test_manifest_bytes_shape(tmp_path):
-    cfg, overlay, wheel, catalog = _make_cfg(tmp_path)
-    cat = Catalog.load(catalog)
-    plan = artifacts.plan(cfg, "job-xyz", cat=cat, overlay=overlay, wheel=wheel)
-    manifest = json.loads(artifacts.manifest_bytes(cfg, "job-xyz", plan))
-
-    assert manifest["job_uid"] == "job-xyz"
-    assert manifest["region"] == "us-west4"
-    assert manifest["instance_type"] == "n1-standard-8"
-    assert manifest["map_filename"] == "tiny.sd7"
-    assert manifest["artifact_names"] == {
-        "engine": "recoil-test",
-        "bar_content": "bar-test",
-        "map": "tiny-v1",
-    }
-    assert manifest["paths"] == {
-        "engine": "engine/recoil-test.tar.gz",
-        "bar_content": "bar-content/bar-test.tar.gz",
-        "map": "maps/tiny.sd7",
-    }
-    assert manifest["wheel_filename"] == wheel.name
-
-
 class _FakeBlob:
     def __init__(self, name, store, upload_counts):
         self.name = name
@@ -131,10 +88,8 @@ class _FakeClient:
         return _FakeBucket(self.store, self.upload_counts)
 
 
-def _stub_builds(monkeypatch, tmp_path):
-    """Replace build-runner helpers with stubs that emit tiny local tarballs."""
-    from bar_benchmarks.orchestrator import build
-
+def _stub_builders(monkeypatch, tmp_path):
+    """Replace build helpers with stubs that emit tiny local tarballs."""
     def fake_engine(spec, out_dir):
         p = out_dir / f"{spec.name}.tar.gz"
         p.write_bytes(b"engine-bytes")
@@ -150,27 +105,23 @@ def _stub_builds(monkeypatch, tmp_path):
         p.write_bytes(b"map-bytes")
         return p
 
-    monkeypatch.setattr(build, "build_engine", fake_engine)
-    monkeypatch.setattr(build, "build_bar_content", fake_bar)
-    monkeypatch.setattr(build, "fetch_map", fake_map)
-    monkeypatch.setattr(build, "workdir", lambda: tmp_path / "build-scratch")
-    (tmp_path / "build-scratch").mkdir(exist_ok=True)
+    monkeypatch.setattr(artifacts, "build_engine", fake_engine)
+    monkeypatch.setattr(artifacts, "build_bar_content", fake_bar)
+    monkeypatch.setattr(artifacts, "fetch_map", fake_map)
+    scratch = tmp_path / "build-scratch"
+    scratch.mkdir(exist_ok=True)
+    monkeypatch.setattr(artifacts, "_workdir", lambda: scratch)
 
 
-def test_ensure_and_upload_cache_miss_runs_builder(tmp_path, monkeypatch):
-    _stub_builds(monkeypatch, tmp_path)
+def test_build_and_upload_cache_miss_runs_builder(tmp_path, monkeypatch):
+    _stub_builders(monkeypatch, tmp_path)
     cfg, overlay, wheel, catalog = _make_cfg(tmp_path)
     cat = Catalog.load(catalog)
-    plan = artifacts.plan(cfg, "job-xyz", cat=cat, overlay=overlay, wheel=wheel)
-    manifest = artifacts.manifest_bytes(cfg, "job-xyz", plan)
     client = _FakeClient()
 
-    artifacts.ensure_and_upload(
-        "bar-experiments-bench-artifacts", cfg, plan, manifest, cat=cat, client=client
-    )
+    artifacts.build_and_upload(cfg, "job-xyz", cat=cat, overlay=overlay, wheel=wheel, client=client)
 
-    keys = sorted(client.store.keys())
-    assert keys == sorted([
+    assert sorted(client.store.keys()) == sorted([
         "engine/recoil-test.tar.gz",
         "bar-content/bar-test.tar.gz",
         "maps/tiny.sd7",
@@ -179,40 +130,40 @@ def test_ensure_and_upload_cache_miss_runs_builder(tmp_path, monkeypatch):
         f"job-xyz/{wheel.name}",
         "job-xyz/manifest.json",
     ])
-    # Shared blobs got built fresh and then uploaded once.
     assert client.store["engine/recoil-test.tar.gz"] == b"engine-bytes"
     assert client.store["bar-content/bar-test.tar.gz"] == b"bar-bytes"
     assert client.store["maps/tiny.sd7"] == b"map-bytes"
 
+    manifest = json.loads(client.store["job-xyz/manifest.json"])
+    assert manifest["job_uid"] == "job-xyz"
+    assert manifest["region"] == "us-west4"
+    assert manifest["instance_type"] == "n1-standard-8"
+    assert manifest["map_filename"] == "tiny.sd7"
+    assert manifest["artifact_names"] == {
+        "engine": "recoil-test",
+        "bar_content": "bar-test",
+        "map": "tiny-v1",
+    }
+    assert manifest["paths"] == {
+        "engine": "engine/recoil-test.tar.gz",
+        "bar_content": "bar-content/bar-test.tar.gz",
+        "map": "maps/tiny.sd7",
+    }
 
-def test_ensure_and_upload_cache_hit_skips_builder(tmp_path, monkeypatch):
-    build_calls = {"engine": 0, "bar_content": 0, "map": 0}
 
-    from bar_benchmarks.orchestrator import build
-
-    def fake_engine(spec, out_dir):
-        build_calls["engine"] += 1
+def test_build_and_upload_cache_hit_skips_builder(tmp_path, monkeypatch):
+    def fail(*_args, **_kw):
         raise AssertionError("builder should not run on cache hit")
 
-    def fake_bar(spec, out_dir):
-        build_calls["bar_content"] += 1
-        raise AssertionError("builder should not run on cache hit")
-
-    def fake_map(spec, out_dir):
-        build_calls["map"] += 1
-        raise AssertionError("builder should not run on cache hit")
-
-    monkeypatch.setattr(build, "build_engine", fake_engine)
-    monkeypatch.setattr(build, "build_bar_content", fake_bar)
-    monkeypatch.setattr(build, "fetch_map", fake_map)
-    monkeypatch.setattr(build, "workdir", lambda: tmp_path / "build-scratch")
-    (tmp_path / "build-scratch").mkdir(exist_ok=True)
+    monkeypatch.setattr(artifacts, "build_engine", fail)
+    monkeypatch.setattr(artifacts, "build_bar_content", fail)
+    monkeypatch.setattr(artifacts, "fetch_map", fail)
+    scratch = tmp_path / "build-scratch"
+    scratch.mkdir(exist_ok=True)
+    monkeypatch.setattr(artifacts, "_workdir", lambda: scratch)
 
     cfg, overlay, wheel, catalog = _make_cfg(tmp_path)
     cat = Catalog.load(catalog)
-    plan = artifacts.plan(cfg, "job-xyz", cat=cat, overlay=overlay, wheel=wheel)
-    manifest = artifacts.manifest_bytes(cfg, "job-xyz", plan)
-
     pre = {
         "engine/recoil-test.tar.gz": b"cached-engine",
         "bar-content/bar-test.tar.gz": b"cached-bar",
@@ -221,27 +172,25 @@ def test_ensure_and_upload_cache_hit_skips_builder(tmp_path, monkeypatch):
     client = _FakeClient(store=dict(pre))
 
     events: list[tuple[str, bool]] = []
-    artifacts.ensure_and_upload(
-        "bar-experiments-bench-artifacts",
+    artifacts.build_and_upload(
         cfg,
-        plan,
-        manifest,
+        "job-xyz",
         cat=cat,
+        overlay=overlay,
+        wheel=wheel,
         client=client,
         on_upload=lambda uri, cached: events.append((uri, cached)),
     )
 
-    # Builders were not called.
-    assert build_calls == {"engine": 0, "bar_content": 0, "map": 0}
-    # Shared blobs preserved (not re-uploaded).
     for key, body in pre.items():
         assert client.store[key] == body
         assert client.upload_counts.get(key, 0) == 0
-    # Per-job entries still uploaded.
     for key in ("job-xyz/overlay.tar.gz", "job-xyz/startscript.txt", "job-xyz/manifest.json"):
         assert client.upload_counts.get(key, 0) == 1
-    # Cache-hit callback fires for all three shared keys with cached=True.
-    shared_events = [(uri, cached) for uri, cached in events
-                     if "/engine/" in uri or "/bar-content/" in uri or "/maps/" in uri]
+    shared_events = [
+        (uri, cached)
+        for uri, cached in events
+        if "/engine/" in uri or "/bar-content/" in uri or "/maps/" in uri
+    ]
     assert all(cached for _, cached in shared_events)
     assert len(shared_events) == 3

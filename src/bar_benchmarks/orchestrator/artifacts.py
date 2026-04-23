@@ -23,27 +23,31 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import tempfile
 from collections.abc import Callable
-from dataclasses import dataclass
 from pathlib import Path
 
-from bar_benchmarks.orchestrator import build
-from bar_benchmarks.orchestrator.catalog import Catalog, key_from_uri
+from bar_benchmarks.orchestrator.catalog import (
+    BarContentSpec,
+    Catalog,
+    EngineSpec,
+    MapSpec,
+    key_from_uri,
+)
 from bar_benchmarks.types import ArtifactNames, BatchConfig
 
 
-@dataclass(frozen=True)
-class UploadPlan:
-    names: ArtifactNames
-    shared_keys: dict[str, str]  # "engine" | "bar_content" | "map" -> bucket key
-    map_filename: str
-    wheel_filename: str
-    key_prefix: str  # "<job_uid>/"
-    job_uploads: dict[str, Path]  # filename under key_prefix -> local source
+def _repo_root() -> Path:
+    here = Path(__file__).resolve()
+    for parent in (here, *here.parents):
+        if (parent / "pyproject.toml").is_file():
+            return parent
+    raise RuntimeError("could not locate project root (no pyproject.toml on ancestor path)")
 
 
-def build_wheel(project_root: Path) -> Path:
+def build_wheel() -> Path:
     """Build the current project's wheel into dist/ and return its path."""
+    project_root = _repo_root()
     dist = project_root / "dist"
     for existing in dist.glob("*.whl"):
         existing.unlink()
@@ -60,14 +64,66 @@ def build_wheel(project_root: Path) -> Path:
     return wheels[-1]
 
 
-def plan(
+def _run(cmd: list[str]) -> None:
+    print(f"[build] {' '.join(cmd)}", file=sys.stderr)
+    subprocess.run(cmd, check=True, stdout=sys.stdout, stderr=sys.stderr)
+
+
+def build_engine(spec: EngineSpec, out_dir: Path) -> Path:
+    out = out_dir / f"{spec.name}.tar.gz"
+    _run([
+        str(_repo_root() / "scripts" / "build-engine.sh"),
+        "--commit", spec.commit,
+        "--output", str(out),
+    ])
+    return out
+
+
+def build_bar_content(spec: BarContentSpec, out_dir: Path) -> Path:
+    out = out_dir / f"{spec.name}.tar.gz"
+    _run([
+        str(_repo_root() / "scripts" / "build-bar-content.sh"),
+        "--version", spec.version,
+        "--output", str(out),
+    ])
+    return out
+
+
+def fetch_map(spec: MapSpec, out_dir: Path) -> Path:
+    if spec.source_url is None:
+        raise RuntimeError(
+            f"map {spec.name!r} is not in the bucket and has no source URL to mirror from; "
+            f"upload the map file directly to {spec.dest_uri}, "
+            f"or add a `source = \"https://...\"` line to the map's entry in scripts/artifacts.toml "
+            f"so the orchestrator can mirror it on cache miss"
+        )
+    # dest URI basename is the canonical on-disk filename (runner copies it
+    # to /var/bar-data/maps/<basename>).
+    out = out_dir / Path(spec.dest_uri).name
+    _run(["curl", "--fail", "--location", "--progress-bar", "--output", str(out), spec.source_url])
+    return out
+
+
+def _workdir() -> Path:
+    """Per-run scratch dir for built tarballs. Auto-cleaned on process exit."""
+    return Path(tempfile.mkdtemp(prefix="bar-bench-build-"))
+
+
+def build_and_upload(
     cfg: BatchConfig,
     job_uid: str,
     *,
     cat: Catalog,
     overlay: Path,
     wheel: Path,
-) -> UploadPlan:
+    client=None,
+    on_upload: Callable[[str, bool], None] | None = None,
+) -> None:
+    """Ensure shared blobs exist in the artifacts bucket (build+upload on
+    cache miss), upload per-job blobs, and write the manifest last.
+
+    `on_upload(uri, cached)` fires for every bucket key touched.
+    """
     engine = cat.engine(cfg.engine_name)
     bar = cat.bar_content(cfg.bar_content_name)
     mp = cat.map(cfg.map_name)
@@ -77,67 +133,20 @@ def plan(
     _, map_key = key_from_uri(mp.dest_uri)
     map_filename = Path(map_key).name
 
-    job_uploads = {
-        "overlay.tar.gz": overlay,
-        "startscript.txt": cfg.scenario_dir / "startscript.txt",
-        wheel.name: wheel,
-    }
-    return UploadPlan(
-        names=ArtifactNames(
-            engine=cfg.engine_name,
-            bar_content=cfg.bar_content_name,
-            map=cfg.map_name,
-        ),
-        shared_keys={"engine": engine_key, "bar_content": bar_key, "map": map_key},
-        map_filename=map_filename,
-        wheel_filename=wheel.name,
-        key_prefix=f"{job_uid}/",
-        job_uploads=job_uploads,
-    )
-
-
-def manifest_bytes(cfg: BatchConfig, job_uid: str, plan_: UploadPlan) -> bytes:
-    body = {
-        "job_uid": job_uid,
-        "region": cfg.region,
-        "instance_type": cfg.machine_type,
-        "map_filename": plan_.map_filename,
-        "artifact_names": plan_.names.model_dump(),
-        "paths": plan_.shared_keys,
-        "wheel_filename": plan_.wheel_filename,
-    }
-    return json.dumps(body, indent=2, sort_keys=True).encode()
-
-
-def ensure_and_upload(
-    bucket_name: str,
-    cfg: BatchConfig,
-    plan_: UploadPlan,
-    manifest: bytes,
-    *,
-    cat: Catalog,
-    project: str | None = None,
-    client=None,
-    on_upload: Callable[[str, bool], None] | None = None,
-) -> None:
-    """Ensure shared blobs exist in the bucket (build+upload on miss),
-    then upload per-job blobs + manifest unconditionally.
-
-    `on_upload(uri, cached)` fires for every bucket key touched.
-    """
     if client is None:
         from google.cloud import storage  # lazy import so tests don't need creds
 
-        client = storage.Client(project=project)
+        client = storage.Client(project=cfg.project)
     if on_upload is None:
         def on_upload(uri: str, cached: bool) -> None:
             verb = "cached" if cached else "uploading"
             print(f"[run] {verb} → {uri}", file=sys.stderr)
 
+    bucket_name = cfg.artifacts_bucket.removeprefix("gs://")
     bucket = client.bucket(bucket_name)
+    scratch = _workdir()
 
-    def _ensure_shared(kind: str, ensure_local: Callable[[], Path]) -> None:
-        key = plan_.shared_keys[kind]
+    def _ensure_shared(key: str, ensure_local: Callable[[], Path]) -> None:
         uri = f"gs://{bucket_name}/{key}"
         blob = bucket.blob(key)
         if blob.exists():
@@ -147,20 +156,37 @@ def ensure_and_upload(
         on_upload(uri, False)
         blob.upload_from_filename(str(local))
 
-    scratch = build.workdir()
-    _ensure_shared("engine", lambda: build.build_engine(cat.engine(cfg.engine_name), scratch))
-    _ensure_shared(
-        "bar_content",
-        lambda: build.build_bar_content(cat.bar_content(cfg.bar_content_name), scratch),
-    )
-    _ensure_shared("map", lambda: build.fetch_map(cat.map(cfg.map_name), scratch))
+    _ensure_shared(engine_key, lambda: build_engine(engine, scratch))
+    _ensure_shared(bar_key, lambda: build_bar_content(bar, scratch))
+    _ensure_shared(map_key, lambda: fetch_map(mp, scratch))
 
-    for name, src in plan_.job_uploads.items():
-        key = plan_.key_prefix + name
-        uri = f"gs://{bucket_name}/{key}"
-        on_upload(uri, False)
+    key_prefix = f"{job_uid}/"
+    job_uploads = {
+        "overlay.tar.gz": overlay,
+        "startscript.txt": cfg.scenario_dir / "startscript.txt",
+        wheel.name: wheel,
+    }
+    for name, src in job_uploads.items():
+        key = key_prefix + name
+        on_upload(f"gs://{bucket_name}/{key}", False)
         bucket.blob(key).upload_from_filename(str(src))
 
-    manifest_key = plan_.key_prefix + "manifest.json"
+    manifest = json.dumps(
+        {
+            "job_uid": job_uid,
+            "region": cfg.region,
+            "instance_type": cfg.machine_type,
+            "map_filename": map_filename,
+            "artifact_names": ArtifactNames(
+                engine=cfg.engine_name,
+                bar_content=cfg.bar_content_name,
+                map=cfg.map_name,
+            ).model_dump(),
+            "paths": {"engine": engine_key, "bar_content": bar_key, "map": map_key},
+        },
+        indent=2,
+        sort_keys=True,
+    ).encode()
+    manifest_key = key_prefix + "manifest.json"
     on_upload(f"gs://{bucket_name}/{manifest_key}", False)
     bucket.blob(manifest_key).upload_from_string(manifest, content_type="application/json")

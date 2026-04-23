@@ -46,11 +46,10 @@ def _resolve_min_cpu_platform(machine_type: str, override: str | None) -> str | 
 
 
 # Per-task resource claim. Batch divides vCPUs and memory per VM by
-# these to auto-derive task_count_per_node when BatchConfig leaves it
-# unset, so sizing these ⇒ choosing how many tasks pack onto a VM.
-# Dropping TASK_CPU_MILLI to 4000 on an n1-standard-8 gets you 2
-# tasks/VM; bumping --machine-type to n1-standard-16 at 8000 does the
-# same. Same applies for memory.
+# these to auto-derive tasks-per-VM, so sizing these ⇒ choosing how
+# many tasks pack onto a VM. Dropping TASK_CPU_MILLI to 4000 on an
+# n1-standard-8 gets you 2 tasks/VM; bumping --machine-type to
+# n1-standard-16 at 8000 does the same. Same applies for memory.
 TASK_CPU_MILLI = 16000
 TASK_MEMORY_MIB = 28 * 1024
 
@@ -71,8 +70,7 @@ SCRATCH_CONTAINER_PATH = "/var/bar-scratch"
 # Artifact Registry (scripts/batch-runtime.Dockerfile builds it) so VMs
 # on private IPs can pull without external network access — Private
 # Google Access covers *.pkg.dev. Pre-installed pydantic means the
-# bootstrap doesn't hit PyPI either. Default; overridable per-config
-# via BatchConfig.container_image.
+# bootstrap doesn't hit PyPI either.
 CONTAINER_IMAGE = (
     "us-central1-docker.pkg.dev/bar-experiments/benchmarks/batch-runtime:2026-04-22"
 )
@@ -182,13 +180,14 @@ def build_job(
         ),
     ]
 
-    image = cfg.container_image
     runnables = [
-        _container_runnable(["/bin/sh", "-c", BOOTSTRAP_SCRIPT], image=image),
-        _container_runnable(["python3", "-m", "bar_benchmarks.task.runner"], image=image),
+        _container_runnable(["/bin/sh", "-c", BOOTSTRAP_SCRIPT], image=CONTAINER_IMAGE),
+        _container_runnable(
+            ["python3", "-m", "bar_benchmarks.task.runner"], image=CONTAINER_IMAGE
+        ),
         _container_runnable(
             ["python3", "-m", "bar_benchmarks.task.collector"],
-            image=image,
+            image=CONTAINER_IMAGE,
             always_run=True,
         ),
     ]
@@ -205,17 +204,13 @@ def build_job(
         max_retry_count=0,
     )
 
-    group_kwargs: dict = {
-        "task_count": cfg.count,
-        "parallelism": cfg.count,
-        "task_spec": task_spec,
-    }
-    # Omit task_count_per_node when unset: Batch auto-derives K from
-    # vCPUs/memory per VM ÷ per-task compute_resource. Setting it
-    # explicitly (including to 1) overrides that and caps at the value.
-    if cfg.task_count_per_node is not None:
-        group_kwargs["task_count_per_node"] = cfg.task_count_per_node
-    group = batch_v1.TaskGroup(**group_kwargs)
+    # task_count_per_node is omitted: Batch auto-derives K from
+    # vCPUs/memory per VM ÷ per-task compute_resource.
+    group = batch_v1.TaskGroup(
+        task_count=cfg.count,
+        parallelism=cfg.count,
+        task_spec=task_spec,
+    )
 
     policy_kwargs: dict = {
         "machine_type": cfg.machine_type,
@@ -246,29 +241,28 @@ def build_job(
         cfg.service_account
         or f"benchmark-runner@{cfg.project}.iam.gserviceaccount.com"
     )
-    allocation_kwargs: dict = {
-        "instances": [
-            batch_v1.AllocationPolicy.InstancePolicyOrTemplate(
-                policy=policy,
-                install_ops_agent=True,
-            )
+    # Private-IP-only networking: every Batch VM lands in the project's
+    # `default` VPC with no external IP. The `default` subnet in
+    # us-central1 has Private Google Access enabled, so GCS / Logging /
+    # Artifact Registry stay reachable via the private.googleapis.com VIP.
+    allocation = batch_v1.AllocationPolicy(
+        instances=[
+            batch_v1.AllocationPolicy.InstancePolicyOrTemplate(policy=policy)
         ],
-        "service_account": batch_v1.ServiceAccount(email=service_account_email),
-    }
-    if cfg.network:
-        allocation_kwargs["network"] = batch_v1.AllocationPolicy.NetworkPolicy(
+        service_account=batch_v1.ServiceAccount(email=service_account_email),
+        network=batch_v1.AllocationPolicy.NetworkPolicy(
             network_interfaces=[
                 batch_v1.AllocationPolicy.NetworkInterface(
-                    network=f"projects/{cfg.project}/global/networks/{cfg.network}",
+                    network=f"projects/{cfg.project}/global/networks/default",
                     subnetwork=(
                         f"projects/{cfg.project}/regions/{cfg.region}"
-                        f"/subnetworks/{cfg.subnetwork}"
+                        "/subnetworks/default"
                     ),
-                    no_external_ip_address=cfg.no_external_ip,
+                    no_external_ip_address=True,
                 )
             ]
-        )
-    allocation = batch_v1.AllocationPolicy(**allocation_kwargs)
+        ),
+    )
 
     return batch_v1.Job(
         task_groups=[group],

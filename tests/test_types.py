@@ -29,15 +29,15 @@ def _result_kwargs():
             engine_exit=0,
         ),
         benchmark={"frames": 1234},
-        valid=True,
     )
 
 
 def test_result_roundtrip():
     r = Result(**_result_kwargs())
+    assert r.valid is True
     dumped = r.model_dump(mode="json")
-    assert dumped["valid"] is True
     assert dumped["artifact_names"]["engine"] == "recoil-abc1234"
+    assert dumped["invalid_reason"] is None
     reloaded = Result.model_validate(dumped)
     assert reloaded == r
 

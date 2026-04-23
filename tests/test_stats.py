@@ -48,8 +48,7 @@ def _r(
             engine_exit=0 if valid else 1,
         ),
         benchmark=benchmark,
-        valid=valid,
-        invalid_reason=reason,
+        invalid_reason=reason if not valid else None,
     )
 
 

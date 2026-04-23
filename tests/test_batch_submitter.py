@@ -32,7 +32,7 @@ def test_job_shape_snapshot():
     group = job.task_groups[0]
     assert group.task_count == 4
     assert group.parallelism == 4
-    # Unset — Batch derives K from vCPUs/memory per VM ÷ per-task
+    # Batch auto-derives tasks-per-VM from vCPUs/memory per VM ÷ per-task
     # compute_resource. 0 is the protobuf "field not set" value.
     assert group.task_count_per_node == 0
 
@@ -109,7 +109,6 @@ def test_job_shape_snapshot():
     }
 
     # Allocation policy.
-    assert job.allocation_policy.instances[0].install_ops_agent is True
     inst = job.allocation_policy.instances[0].policy
     assert inst.machine_type == "n1-standard-8"
     # n1 is a multi-gen family; table pins it to Skylake for reproducibility.
@@ -180,50 +179,6 @@ def test_min_cpu_platform_empty_override_forces_unset():
     job = batch_submitter.build_job(cfg, job_uid="job-xyz")
     inst = job.allocation_policy.instances[0].policy
     assert inst.min_cpu_platform == ""
-
-
-def test_task_count_per_node_explicit_cap():
-    # Setting the value overrides Batch's auto-derive. Caller is
-    # responsible for ensuring K * compute_resource fits the VM.
-    cfg = _cfg().model_copy(update={"task_count_per_node": 2})
-    job = batch_submitter.build_job(cfg, job_uid="job-xyz")
-    assert job.task_groups[0].task_count_per_node == 2
-
-
-def test_network_policy_override():
-    cfg = _cfg().model_copy(update={"network": "bar-vpc", "subnetwork": "bar-subnet"})
-    job = batch_submitter.build_job(cfg, job_uid="job-xyz")
-    ifaces = list(job.allocation_policy.network.network_interfaces)
-    assert len(ifaces) == 1
-    assert ifaces[0].network == "projects/bar-experiments/global/networks/bar-vpc"
-    assert (
-        ifaces[0].subnetwork
-        == "projects/bar-experiments/regions/us-west4/subnetworks/bar-subnet"
-    )
-    assert ifaces[0].no_external_ip_address is True
-
-
-def test_network_policy_omitted_when_network_none():
-    cfg = _cfg().model_copy(update={"network": None, "subnetwork": None})
-    job = batch_submitter.build_job(cfg, job_uid="job-xyz")
-    assert len(job.allocation_policy.network.network_interfaces) == 0
-
-
-def test_network_policy_respects_no_external_ip_false():
-    cfg = _cfg().model_copy(
-        update={"network": "bar-vpc", "subnetwork": "bar-subnet", "no_external_ip": False}
-    )
-    job = batch_submitter.build_job(cfg, job_uid="job-xyz")
-    iface = job.allocation_policy.network.network_interfaces[0]
-    assert iface.no_external_ip_address is False
-
-
-def test_container_image_override():
-    override = "us-central1-docker.pkg.dev/bar-experiments/benchmarks/batch-runtime:pinned-abc"
-    cfg = _cfg().model_copy(update={"container_image": override})
-    job = batch_submitter.build_job(cfg, job_uid="job-xyz")
-    for r in job.task_groups[0].task_spec.runnables:
-        assert r.container.image_uri == override
 
 
 def test_default_min_cpu_platform_table():

@@ -16,7 +16,6 @@ def _write_inputs(task_env, *, error=None, has_bench=True):
         ended_at=datetime(2026, 4, 20, 0, 0, 30, tzinfo=UTC),
         engine_exit=0 if error is None else 1,
         engine_wall_s=30.0,
-        benchmark_output_path=str(data / "benchmark-results.json"),
         error=error,
     )
     (run / "verdict.json").write_text(json.dumps(verdict.model_dump(mode="json")))

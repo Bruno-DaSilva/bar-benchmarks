@@ -9,7 +9,6 @@ def test_runner_happy_path(task_env, tiny_artifacts):
     verdict = runner.run()
     assert verdict.engine_exit == 0
     assert verdict.error is None
-    assert verdict.benchmark_output_path is not None
     assert verdict.engine_wall_s is not None and verdict.engine_wall_s >= 0
 
     # benchmark-results.json written by stub engine

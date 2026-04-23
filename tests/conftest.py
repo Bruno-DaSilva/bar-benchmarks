@@ -118,7 +118,6 @@ def tiny_artifacts(task_env):
             "bar_content": bar_content_key,
             "map": map_key,
         },
-        "wheel_filename": "bar_benchmarks-0.1.0-py3-none-any.whl",
     }
     (artifacts / "manifest.json").write_text(json.dumps(manifest))
     return manifest

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import secrets
 import subprocess
 import sys
@@ -12,11 +13,7 @@ from pathlib import Path
 
 from google.cloud import batch_v1
 
-from bar_benchmarks.orchestrator import (
-    artifacts,
-    batch_submitter,
-    run_info,
-)
+from bar_benchmarks.orchestrator import artifacts, batch_submitter
 from bar_benchmarks.orchestrator.catalog import Catalog
 from bar_benchmarks.stats import aggregate
 from bar_benchmarks.types import BatchConfig, BatchReport
@@ -27,14 +24,6 @@ _TERMINAL_JOB_STATES = {
     batch_v1.JobStatus.State.CANCELLED,
     batch_v1.JobStatus.State.DELETION_IN_PROGRESS,
 }
-
-
-def _project_root() -> Path:
-    here = Path(__file__).resolve()
-    for parent in (here, *here.parents):
-        if (parent / "pyproject.toml").is_file():
-            return parent
-    raise RuntimeError("Could not locate project root (no pyproject.toml on ancestor path)")
 
 
 def _mint_job_id() -> str:
@@ -70,6 +59,39 @@ def _wait_for_terminal(job_name: str, *, interval_s: float = 15.0) -> batch_v1.J
         time.sleep(interval_s)
 
 
+def _upload_run_info(cfg: BatchConfig, job_uid: str, submitted_at: datetime) -> None:
+    """Write the per-run parameters blob to `<results-bucket>/<job_uid>/run.json`.
+
+    Post-hoc breadcrumb for "what was this run": catalog names, scenario
+    folder, machine shape, operator description, submit timestamp.
+    Separate from the artifacts-bucket manifest.json (consumed by task VMs).
+    """
+    from google.cloud import storage
+
+    body = json.dumps(
+        {
+            "job_uid": job_uid,
+            "submitted_at": submitted_at.isoformat(),
+            "run_description": cfg.run_description,
+            "engine": cfg.engine_name,
+            "bar_content": cfg.bar_content_name,
+            "map": cfg.map_name,
+            "scenario": cfg.scenario_dir.name,
+            "count": cfg.count,
+            "region": cfg.region,
+            "machine_type": cfg.machine_type,
+            "min_cpu_platform": cfg.min_cpu_platform,
+            "max_run_duration_s": cfg.max_run_duration_s,
+        },
+        indent=2,
+        sort_keys=True,
+    ).encode()
+    bucket_name = cfg.results_bucket.removeprefix("gs://")
+    bucket = storage.Client(project=cfg.project).bucket(bucket_name)
+    bucket.blob(f"{job_uid}/run.json").upload_from_string(body, content_type="application/json")
+    print(f"[run] wrote run.json → gs://{bucket_name}/{job_uid}/run.json", file=sys.stderr)
+
+
 def _missing_task_indices(
     results_bucket: str, job_uid: str, submitted: int, *, project: str | None = None
 ) -> list[int]:
@@ -98,32 +120,15 @@ def run(cfg: BatchConfig) -> BatchReport:
 
     cat = Catalog.load(cfg.catalog_path)
 
-    wheel = cfg.wheel if cfg.wheel else artifacts.build_wheel(_project_root())
+    wheel = cfg.wheel if cfg.wheel else artifacts.build_wheel()
     print(f"[run] wheel={wheel.name}", file=sys.stderr)
 
     overlay = _pack_overlay(cfg.scenario_dir)
     print(f"[run] overlay packed from {cfg.scenario_dir}", file=sys.stderr)
 
-    plan = artifacts.plan(cfg, job_uid, cat=cat, overlay=overlay, wheel=wheel)
-    manifest = artifacts.manifest_bytes(cfg, job_uid, plan)
+    artifacts.build_and_upload(cfg, job_uid, cat=cat, overlay=overlay, wheel=wheel)
 
-    artifacts_bucket = cfg.artifacts_bucket.removeprefix("gs://")
-    artifacts.ensure_and_upload(
-        artifacts_bucket, cfg, plan, manifest, cat=cat, project=cfg.project
-    )
-
-    submitted_at = datetime.now(UTC)
-    run_info.upload(
-        cfg.results_bucket,
-        job_uid,
-        run_info.run_info_bytes(cfg, job_uid, submitted_at),
-        project=cfg.project,
-    )
-    results_bucket_name = cfg.results_bucket.removeprefix("gs://")
-    print(
-        f"[run] wrote run.json → gs://{results_bucket_name}/{job_uid}/run.json",
-        file=sys.stderr,
-    )
+    _upload_run_info(cfg, job_uid, datetime.now(UTC))
 
     print(f"[run] submitting Batch Job ({cfg.count} tasks)", file=sys.stderr)
     job = batch_submitter.submit(cfg, job_id=job_uid)

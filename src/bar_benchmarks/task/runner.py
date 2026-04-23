@@ -100,19 +100,14 @@ def run() -> RunnerVerdict:
     error: str | None = None
     engine_exit = -1
     wall = 0.0
-    bench_out: str | None = None
 
     try:
         startscript = _stage(artifacts, bucket_root, shared_keys, map_filename)
         engine_exit, wall = _invoke_engine(startscript)
         if engine_exit != 0:
             error = "engine_crash"
-        else:
-            bp = paths.benchmark_output_path()
-            if bp.is_file():
-                bench_out = str(bp)
-            else:
-                error = "overlay_output_missing"
+        elif not paths.benchmark_output_path().is_file():
+            error = "overlay_output_missing"
     except Exception as e:
         error = f"runner_exception: {e}"
 
@@ -122,7 +117,6 @@ def run() -> RunnerVerdict:
         ended_at=ended_at,
         engine_exit=engine_exit,
         engine_wall_s=wall,
-        benchmark_output_path=bench_out,
         error=error,
     )
 

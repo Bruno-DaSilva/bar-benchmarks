@@ -13,14 +13,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-INFOLOG_FILENAME = "infolog.txt"
-
 from bar_benchmarks import paths
 from bar_benchmarks.types import (
     ArtifactNames,
     Result,
     RunnerVerdict,
 )
+
+INFOLOG_FILENAME = "infolog.txt"
 
 
 def _load_json(p: Path) -> dict[str, Any] | None:
@@ -37,7 +37,6 @@ def _verdict() -> RunnerVerdict:
             started_at=now,
             ended_at=now,
             engine_exit=-1,
-            benchmark_output_path=None,
             error="runner_did_not_run",
         )
     return RunnerVerdict.model_validate(data)
@@ -48,20 +47,11 @@ def _benchmark() -> dict[str, Any]:
     return data if data is not None else {}
 
 
-def _compute_verdict(verdict: RunnerVerdict) -> tuple[bool, str | None]:
-    if verdict.error:
-        return False, verdict.error
-    return True, None
-
-
 def run() -> Result:
     artifacts = paths.artifacts_dir()
     manifest = json.loads((artifacts / "manifest.json").read_text())
 
     verdict = _verdict()
-    benchmark = _benchmark()
-    valid, reason = _compute_verdict(verdict)
-
     result = Result(
         batch_id=manifest["job_uid"],
         vm_id=paths.batch_task_index(),
@@ -69,9 +59,8 @@ def run() -> Result:
         region=manifest["region"],
         artifact_names=ArtifactNames(**manifest["artifact_names"]),
         run=verdict,
-        benchmark=benchmark,
-        valid=valid,
-        invalid_reason=reason,
+        benchmark=_benchmark(),
+        invalid_reason=verdict.error,
     )
 
     out_dir = paths.results_dir() / paths.batch_task_index()
