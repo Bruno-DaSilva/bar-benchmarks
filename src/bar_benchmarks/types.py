@@ -117,6 +117,7 @@ class BatchReport(BaseModel):
     sim_mean_ms_stddev: float | None = None
     sim_mean_ms_median: float | None = None
     sim_mean_ms_p95: float | None = None
+    engine_wall_s_mean: float | None = None
     instance_type: str | None = None
     region: str | None = None
     total_billable_s: float | None = None

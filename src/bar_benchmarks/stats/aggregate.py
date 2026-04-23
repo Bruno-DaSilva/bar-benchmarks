@@ -65,6 +65,9 @@ def summarize(
     median = statistics.median(sim_ms) if sim_ms else None
     p95 = _p95(sim_ms)
 
+    wall_samples = [r.run.engine_wall_s for r in valid if r.run.engine_wall_s is not None]
+    wall_mean = statistics.fmean(wall_samples) if wall_samples else None
+
     instance_type = results[0].instance_type if results else None
     region = results[0].region if results else None
 
@@ -80,6 +83,7 @@ def summarize(
         sim_mean_ms_stddev=stddev,
         sim_mean_ms_median=median,
         sim_mean_ms_p95=p95,
+        engine_wall_s_mean=wall_mean,
         instance_type=instance_type,
         region=region,
     )
