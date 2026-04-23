@@ -47,9 +47,11 @@ def _resolve_min_cpu_platform(machine_type: str, override: str | None) -> str | 
 
 # Per-task resource claim. Batch divides vCPUs and memory per VM by
 # these to auto-derive tasks-per-VM, so sizing these ⇒ choosing how
-# many tasks pack onto a VM. Dropping TASK_CPU_MILLI to 4000 on an
-# n1-standard-8 gets you 2 tasks/VM; bumping --machine-type to
-# n1-standard-16 at 8000 does the same. Same applies for memory.
+# many tasks pack onto a VM. At 16000 on c2d-standard-16 (the default
+# machine type) this resolves to one task per VM — a whole VM owned by
+# a single benchmark run, which is the point. Halve TASK_CPU_MILLI to
+# pack two tasks per VM, or bump --machine-type to c2d-standard-32 and
+# keep the same one-task-per-VM shape. Memory sizing is analogous.
 TASK_CPU_MILLI = 16000
 TASK_MEMORY_MIB = 28 * 1024
 

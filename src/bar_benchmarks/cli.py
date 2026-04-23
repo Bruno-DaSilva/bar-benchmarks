@@ -16,7 +16,7 @@ DEFAULT_PROJECT = "bar-experiments"
 DEFAULT_REGION = "us-central1"
 DEFAULT_ARTIFACTS_BUCKET = "gs://bar-experiments-bench-artifacts"
 DEFAULT_RESULTS_BUCKET = "gs://bar-experiments-bench-results"
-DEFAULT_MACHINE = "n1-standard-8"
+DEFAULT_MACHINE = "c2d-standard-16"
 DEFAULT_CATALOG = Path("artifacts.toml")
 DEFAULT_BENCHMARKS_DIR = Path("benchmarks")
 

@@ -46,7 +46,7 @@ for a complete PR-triggered workflow.
 | `gcp-region`          | no              | `us-central1`                               | |
 | `artifacts-bucket`    | no              | `gs://bar-experiments-bench-artifacts`      | Staging bucket. |
 | `results-bucket`      | no              | `gs://bar-experiments-bench-results`        | Per-task `results.json` destination. |
-| `machine-type`        | no              | `n1-standard-8`                             | GCE machine type. |
+| `machine-type`        | no              | `c2d-standard-16`                           | GCE machine type. Per-task CPU claim is 16 vCPU, so each benchmark gets a whole VM at the default. |
 | `service-account`     | no              | `benchmark-runner@<gcp-project>.iam.gserviceaccount.com` | Attached to Batch VMs. |
 | `max-run-duration`    | no              | `1800`                                      | Per-task timeout (seconds). |
 | `github-token`        | no              | `${{ github.token }}`                       | Used by `scripts/build-engine.sh` on a cache miss. Cross-repo artifact reads may need a PAT with `actions:read` on `beyond-all-reason/RecoilEngine`. |

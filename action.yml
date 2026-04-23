@@ -55,9 +55,12 @@ inputs:
     required: false
     default: "gs://bar-experiments-bench-results"
   machine-type:
-    description: "GCE machine type for each VM."
+    description: >-
+      GCE machine type for each VM. Default is c2d-standard-16 (16 vCPU,
+      AMD EPYC Milan), which matches the orchestrator's per-task CPU claim
+      so each benchmark gets a whole VM.
     required: false
-    default: "n1-standard-8"
+    default: "c2d-standard-16"
   service-account:
     description: "Service account email to attach to Batch VMs. Default derives from gcp-project."
     required: false
