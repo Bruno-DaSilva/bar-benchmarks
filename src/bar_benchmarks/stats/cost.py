@@ -1,10 +1,29 @@
 """Attach compute-cost fields to a BatchReport.
 
-Ground truth comes from the Batch API: each task exposes
-`status_events` with PENDING / ASSIGNED / RUNNING / SUCCEEDED|FAILED
-timestamps, and the PENDING→final window is the closest proxy to the
-per-VM billable time. Sum across tasks, multiply by the spot rate from
-`pricing`, and write the numbers onto the report.
+Cost is estimated from the per-iteration `engine_wall_s` recorded by the
+runner plus a flat per-VM overhead, then priced at the instance's spot
+rate from `pricing`.
+
+Per-VM framing (this is the part that's easy to misread):
+
+- `engine_wall_s` on a `Result` is **one iteration's** wall time —
+  measured by `runner._invoke_engine` around a single `spring-headless`
+  invocation. Each VM (one Batch task_index) emits N results, one per
+  iteration.
+- The natural cost unit is per VM. A VM that runs N iterations only
+  boots once, so we charge:
+
+      per_vm_billable_s = Σ engine_wall_s of that VM's iterations + 120
+
+  The 120s is a flat per-VM estimate for boot, artifact staging, and
+  collector/teardown — it is NOT per-iteration.
+- The batch total is the sum of per-VM billables across all VMs,
+  equivalent to:
+
+      total_billable_s = Σ engine_wall_s (all results) + 120 × vm_count
+
+We deliberately ignore PENDING / queue time: GCP doesn't bill for time
+the task spent waiting for a VM to be provisioned.
 
 `apply_cached` is the counterpart for `bar-bench lookup`: a cache-hit
 re-uses prior results at $0.
@@ -12,63 +31,47 @@ re-uses prior results at $0.
 
 from __future__ import annotations
 
-import sys
-from typing import Any
+from collections.abc import Iterable
 
 from bar_benchmarks.stats.pricing import spot_usd_per_hour
-from bar_benchmarks.types import BatchReport
+from bar_benchmarks.types import BatchReport, Result
+
+PER_VM_OVERHEAD_S: float = 120.0
 
 
-def _billable_s_from_tasks(tasks: list[Any]) -> float:
-    """Sum PENDING→SUCCEEDED|FAILED windows across tasks, in seconds."""
+def _billable_s_from_results(results: Iterable[Result], vm_count: int) -> float:
+    """Sum per-iteration engine wall time + flat per-VM overhead.
+
+    `engine_wall_s` is per-iteration; `vm_count` is the number of VMs in
+    the batch (each runs ≥1 iteration). Equivalent to the per-VM
+    formulation `Σ_vm (Σ_iter engine_wall_s + 120)`.
+    """
     total = 0.0
-    for t in tasks:
-        pending_ts: float | None = None
-        final_ts: float | None = None
-        for ev in t.status.status_events:
-            state = ev.task_state.name
-            ts = ev.event_time.timestamp()
-            if state == "PENDING" and pending_ts is None:
-                pending_ts = ts
-            elif state in ("SUCCEEDED", "FAILED"):
-                final_ts = ts
-        if pending_ts is not None and final_ts is not None:
-            total += final_ts - pending_ts
+    for r in results:
+        wall = r.run.engine_wall_s
+        if wall is not None:
+            total += wall
+    total += PER_VM_OVERHEAD_S * vm_count
     return total
 
 
-def apply_from_batch_api(
+def apply_from_results(
     report: BatchReport,
     *,
-    project: str,
+    results: Iterable[Result],
+    vm_count: int,
 ) -> BatchReport:
-    """Fetch task timings from the Batch API and attach cost to the report.
+    """Attach billable-seconds and cost fields to the report.
 
-    On any API failure (job GC'd, permission, network) the report is
-    returned unchanged — cost stays None and `print_report` skips the
-    line. Uses the report's own `region` (and implicitly `group0` task
-    group, which `batch_submitter.build_job` hardcodes).
+    Inputs are the per-iteration `Result` objects (already loaded by the
+    caller for aggregation) and `vm_count` — the number of VMs the batch
+    submitted, NOT the iteration-count. Skips silently when the report
+    has no instance shape to price against.
     """
     if not report.instance_type or not report.region:
         return report
-    try:
-        from google.cloud import batch_v1
 
-        client = batch_v1.BatchServiceClient()
-        parent = (
-            f"projects/{project}/locations/{report.region}/jobs/"
-            f"{report.job_uid}/taskGroups/group0"
-        )
-        tasks = list(client.list_tasks(parent=parent))
-    except Exception as exc:  # noqa: BLE001 — any failure → skip cost
-        print(
-            f"[cost] batch api unavailable ({type(exc).__name__}: {exc}); "
-            f"no cost attached to report",
-            file=sys.stderr,
-        )
-        return report
-
-    billable_s = _billable_s_from_tasks(tasks)
+    billable_s = _billable_s_from_results(results, vm_count)
     rate = spot_usd_per_hour(report.instance_type, report.region)
     compute_usd = billable_s / 3600 * rate if rate is not None else None
     return report.model_copy(

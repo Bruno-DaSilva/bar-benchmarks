@@ -190,7 +190,9 @@ def run(cfg: BatchConfig, *, report_json_path: Path | None = None) -> BatchRepor
         job_uid=job_uid,
         run_description=cfg.run_description,
     )
-    per_job_report = cost.apply_from_batch_api(per_job_report, project=cfg.project)
+    per_job_report = cost.apply_from_results(
+        per_job_report, results=new_results, vm_count=cfg.count
+    )
     _upload_report_to_bucket(cfg, job_uid, per_job_report)
 
     # Rolling-window report (this run + historical matching results) →
@@ -215,10 +217,9 @@ def run(cfg: BatchConfig, *, report_json_path: Path | None = None) -> BatchRepor
         f"pooled valid={rolling_report.valid} invalid={rolling_report.invalid}",
         file=sys.stderr,
     )
-    # rolling_report.job_uid is this run's job_uid (extras' batch_id), so
-    # the Batch API cost lookup below resolves the just-completed job's
-    # task timings — i.e. the cost reflects the fresh compute we just
-    # paid for, not a sum across the historical pool.
+    # Cost reflects only the fresh compute we just paid for — copy from
+    # per_job_report (computed from this run's per-iteration engine wall
+    # times) rather than re-summing across the historical pool.
     rolling_report = rolling_report.model_copy(
         update={
             "total_billable_s": per_job_report.total_billable_s,

@@ -118,10 +118,42 @@ def stats_cmd(
     ),
 ) -> None:
     """Aggregate a completed batch's results from GCS."""
+    import json
+    import sys
+
+    from google.cloud import storage
+
     from bar_benchmarks.stats import aggregate, cost
 
-    report = aggregate.from_bucket(results_bucket, job_uid, submitted=submitted, project=project)
-    report = cost.apply_from_batch_api(report, project=project)
+    client = storage.Client(project=project)
+    bucket = client.bucket(results_bucket.removeprefix("gs://"))
+    results = list(aggregate.list_job_results(client, bucket, job_uid))
+
+    # vm_count = number of VMs the batch submitted, NOT the iteration
+    # count. Read it from the run.json blob the orchestrator uploaded;
+    # fall back to the unique task_index count from results when run.json
+    # is missing or malformed (older jobs, manual uploads).
+    vm_count: int | None = None
+    iterations: int = 1
+    try:
+        meta = json.loads(bucket.blob(f"{job_uid}/run.json").download_as_bytes())
+        vm_count = int(meta.get("count", 0)) or None
+        iterations = int(meta.get("iterations", 1) or 1)
+    except Exception as exc:  # noqa: BLE001 — fall back to inference
+        print(
+            f"[stats] run.json unavailable ({type(exc).__name__}: {exc}); "
+            f"inferring vm_count from uploaded results",
+            file=sys.stderr,
+        )
+    if vm_count is None:
+        # vm_id is "<task_index>-<iter>"; strip the iter suffix.
+        vm_count = len({r.vm_id.rsplit("-", 1)[0] for r in results})
+
+    if submitted == 0:
+        submitted = vm_count * iterations
+
+    report = aggregate.summarize(results, submitted=submitted, job_uid=job_uid)
+    report = cost.apply_from_results(report, results=results, vm_count=vm_count)
     aggregate.print_report(report)
 
 
