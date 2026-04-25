@@ -71,11 +71,14 @@ def _run(cmd: list[str]) -> None:
 
 def build_engine(spec: EngineSpec, out_dir: Path) -> Path:
     out = out_dir / f"{spec.name}.tar.gz"
-    _run([
+    cmd = [
         str(_repo_root() / "scripts" / "build-engine.sh"),
         "--commit", spec.commit,
         "--output", str(out),
-    ])
+    ]
+    if spec.repo:
+        cmd += ["--repo", spec.repo]
+    _run(cmd)
     return out
 
 

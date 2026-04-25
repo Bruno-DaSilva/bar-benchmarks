@@ -9,11 +9,13 @@
 # artifact = add an entry here.
 #
 # Entry shape (always a TOML table now):
-#   engine.<name>       dest = "gs://...", commit = "<git SHA>"
+#   engine.<name>       dest = "gs://...", commit = "<git SHA>", [repo = "owner/RecoilEngine"]
 #   bar_content.<name>  dest = "gs://...", version = "Beyond All Reason [test-]<build>-<sha>"
 #   map.<name>          dest = "gs://...", [source = "https://..."]
 #
-# `commit` is forwarded to scripts/build-engine.sh --commit on miss.
+# `commit` is forwarded to scripts/build-engine.sh --commit on miss; the
+# optional `repo` is forwarded as --repo (default
+# beyond-all-reason/RecoilEngine in the script).
 # `version` is forwarded to scripts/build-bar-content.sh --version on miss.
 # `source` (maps only) is fetched with curl on miss.
 #

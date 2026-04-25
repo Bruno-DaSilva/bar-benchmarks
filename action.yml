@@ -21,6 +21,15 @@ inputs:
     description: "RecoilEngine commit SHA (>=7 chars hex). Ad-hoc; synthesizes a catalog entry."
     required: false
     default: ""
+  engine-repo:
+    description: >-
+      GitHub repo to query for the "Build Engine v2" run + artifact when
+      building from a commit. Forwarded to scripts/build-engine.sh --repo.
+      Only meaningful with engine-commit. Defaults to the calling
+      workflow's own repo so the action works unchanged on a fork; set
+      explicitly to point at a different RecoilEngine fork.
+    required: false
+    default: ${{ github.repository }}
   bar-content:
     description: "Bar-content catalog name. Mutually exclusive with bar-content-version."
     required: false
@@ -171,6 +180,7 @@ runs:
         )
         [ -n "${{ inputs.engine }}" ] && args+=(--engine "${{ inputs.engine }}")
         [ -n "${{ inputs.engine-commit }}" ] && args+=(--engine-commit "${{ inputs.engine-commit }}")
+        [ -n "${{ inputs.engine-repo }}" ] && args+=(--engine-repo "${{ inputs.engine-repo }}")
         [ -n "${{ inputs.bar-content }}" ] && args+=(--bar-content "${{ inputs.bar-content }}")
         [ -n "${{ inputs.bar-content-version }}" ] && args+=(--bar-content-version "${{ inputs.bar-content-version }}")
         uv run python action/build_catalog.py "${args[@]}" | tee -a "${GITHUB_OUTPUT}"

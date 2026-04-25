@@ -17,6 +17,7 @@ class EngineSpec:
     name: str
     dest_uri: str
     commit: str
+    repo: str | None = None
 
 
 @dataclass(frozen=True)
@@ -64,10 +65,14 @@ class Catalog:
 
     def engine(self, name: str) -> EngineSpec:
         entry = _table(self._data, "engine", name)
+        repo = entry.get("repo")
+        if repo is not None and (not isinstance(repo, str) or not repo):
+            raise TypeError(f"[engine.{name!r}] repo must be a non-empty string if present")
         return EngineSpec(
             name=name,
             dest_uri=_require(entry, "dest", "engine", name),
             commit=_require(entry, "commit", "engine", name),
+            repo=repo,
         )
 
     def bar_content(self, name: str) -> BarContentSpec:

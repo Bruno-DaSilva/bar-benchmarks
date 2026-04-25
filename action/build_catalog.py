@@ -38,6 +38,7 @@ def _resolve_engine(
     *,
     engine: str | None,
     engine_commit: str | None,
+    engine_repo: str | None,
     artifacts_bucket: str,
 ) -> tuple[str, str | None]:
     """Return (effective_name, toml_block_to_append_or_None)."""
@@ -63,6 +64,8 @@ def _resolve_engine(
         f'dest = "{_toml_escape(dest)}"\n'
         f'commit = "{_toml_escape(sha)}"\n'
     )
+    if engine_repo:
+        block += f'repo = "{_toml_escape(engine_repo)}"\n'
     return name, block
 
 
@@ -106,6 +109,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--artifacts-bucket", required=True)
     p.add_argument("--engine", default=None)
     p.add_argument("--engine-commit", default=None)
+    p.add_argument("--engine-repo", default=None)
     p.add_argument("--bar-content", default=None)
     p.add_argument("--bar-content-version", default=None)
     args = p.parse_args(argv)
@@ -117,6 +121,7 @@ def main(argv: list[str] | None = None) -> int:
         data,
         engine=args.engine,
         engine_commit=args.engine_commit,
+        engine_repo=args.engine_repo,
         artifacts_bucket=args.artifacts_bucket,
     )
     bc_name, bc_block = _resolve_bar_content(
