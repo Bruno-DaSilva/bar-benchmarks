@@ -107,7 +107,7 @@ inputs:
   lookup-scan-limit:
     description: "Max recent job UIDs to inspect when lookup-prior-results is true."
     required: false
-    default: "100"
+    default: "250"
   lookup-min-samples:
     description: >-
       Skip the Batch submission when the rolling window has at least
